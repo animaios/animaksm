@@ -1,12 +1,19 @@
-# AnimaKSMD
+<div align=center>
 
-> **The spiritual successor to uksmd — a modern, Rust-based userspace KSM daemon with PTrace-powered MADV_MERGEABLE injection.**
+# [Anima](https://github.com/animaios/animacore)KSMD
+
+<img width="256" height="384" alt="AnimAIOS mascot" src="https://github.com/user-attachments/assets/8d548058-3363-481b-90d6-09f4620f70f7" />
+
+
+### The spiritual successor to uksmd — a modern, Rust-based userspace KSM daemon with PTrace-powered MADV_MERGEABLE injection
+
 <!--
 [![Crates.io](https://img.shields.io/crates/v/animaksm-daemon.svg)](https://crates.io/crates.io/crates/animaksm-daemon)
 [![Documentation](https://docs.rs/animaksm-daemon/badge.svg)](https://docs.rs/animaksm-daemon)
+[![Build Status](https://github.com/animaios/animaksm/workflows/CI/badge.svg)](https://github.com/animaios/animaksm/actions)
 -->
 
-[![DeepSource](https://app.deepsource.com/gh/animaios/animaksmd.svg/?label=code+coverage&show_trend=true&token=iBvsQ1aAT0R9zi6jTngKW_VR)](https://app.deepsource.com/gh/animaios/animaksmd/)[![Build Status](https://github.com/animaios/animaksm/workflows/CI/badge.svg)](https://github.com/animaios/animaksm/actions)
+[![DeepSource](https://app.deepsource.com/gh/animaios/animaksmd.svg/?label=code+coverage&show_trend=true&token=iBvsQ1aAT0R9zi6jTngKW_VR)](https://app.deepsource.com/gh/animaios/animaksmd/)
 [![DeepSource](https://app.deepsource.com/gh/animaios/animaksmd.svg/?label=active+issues&show_trend=true&token=iBvsQ1aAT0R9zi6jTngKW_VR)](https://app.deepsource.com/gh/animaios/animaksmd/)
 [![DeepSource](https://app.deepsource.com/gh/animaios/animaksmd.svg/?label=resolved+issues&show_trend=true&token=iBvsQ1aAT0R9zi6jTngKW_VR)](https://app.deepsource.com/gh/animaios/animaksmd/)
 
@@ -14,7 +21,7 @@
 
 ## Why AnimaKSMD?
 
-I used to run **uksmd** (the userspace KSM daemon from the CachyOS project) on all my servers. It was brilliant — a userspace daemon that proactively scanned processes and marked their anonymous memory as `MADV_MERGEABLE` so the kernel's KSM (Kernel Samepage Merging) could deduplicate identical pages. It traded a little CPU for massive RAM savings.
+I used to run **uksmd** (the userspace KSM daemon from the CachyOS project) on my desktop. It was brilliant — a userspace daemon that proactively scanned processes and marked their anonymous memory as `MADV_MERGEABLE` so the kernel's KSM (Kernel Samepage Merging) could deduplicate identical pages. It traded a little CPU for massive RAM savings.
 
 Then uksmd went unmaintained. The repo was archived. The kernel evolved — `process_madvise()` gained support for `MADV_COLLAPSE` and `MADV_COLD`, but **never for `MADV_MERGEABLE`**. The old `pidfd` + `process_madvise` approach hit a wall.
 
