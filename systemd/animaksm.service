@@ -19,7 +19,7 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 # /sys/kernel/mm/ksm must be read-write for governor + scanner
-ReadWritePaths=/var/lib/animaksm /sys/kernel/mm/ksm
+ReadWritePaths=/var/lib/animaksm /sys/kernel/mm/ksm /proc
 ReadOnlyPaths=/proc/pressure /etc/animaksm.toml
 RestrictNamespaces=yes
 LockPersonality=yes
