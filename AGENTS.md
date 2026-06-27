@@ -1,11 +1,11 @@
-# AGENTS.md — Repository Guidelines for zramdedup
+# AGENTS.md — Repository Guidelines for animaksm
 
 **Agent Readiness:** This file contains two kinds of guidance:
 - **Universal rules** — project structure, branching, architecture, and security patterns that apply regardless of what tooling you have.
 - **Workflow recommendations** — tool-specific tips that are helpful when the relevant tools are available, but not required to complete tasks. Use whatever tools you have access to.
 
 ## 1. What is this repo?
-`zramdedup` is a Rust-based userspace daemon that drives Linux's Kernel Samepage Merging (KSM) subsystem with a PSI-aware governor, deduplicates compressed swap pages, and exports Prometheus metrics. It reduces memory pressure in cloud, container, and embedded workloads.
+`animaksm` is a Rust-based userspace daemon that drives Linux's Kernel Samepage Merging (KSM) subsystem with a PSI-aware governor, deduplicates compressed swap pages, and exports Prometheus metrics. It reduces memory pressure in cloud, container, and embedded workloads.
 
 ## 2. How is it structured?
 ```
@@ -13,10 +13,10 @@ animaksm/
 ├── Cargo.toml [workspace]
 ├── crates/
 │   ├── common/      # Shared: config, procfs, PSI, KSM, error
-│   ├── daemon/      # zramdedup main binary
+│   ├── daemon/      # animaksm main binary
 │   └── swap-proxy/  # Experimental deduplicating store
 ├── config/
-│   └── zramdedup.toml  # Runtime configuration
+│   └── animaksm.toml  # Runtime configuration
 ├── systemd/            # Service units
 ├── Makefile            # check, test, coverage targets
 ```
@@ -31,7 +31,7 @@ make coverage       # HTML report in target/llvm-cov/html/
 make coverage-ci    # LCOV → target/llvm-cov/lcov.info
 
 # Exercise daemon locally
-cargo run -p zramdedup-daemon -- run --config config/zramdedup.toml --dry-run
+cargo run -p animaksm-daemon -- run --config config/animaksm.toml --dry-run
 ```
 
 ## 4. Tooling Tips (When Available)
@@ -95,7 +95,7 @@ test(scope): description
 ## 8. Architecture Landmines
 - **Kernel/sysfs**: `/sys/kernel/mm/ksm`, `/proc` — dry-run only in local dev
 - **Systemd**: Service units in `systemd/` — document new capabilities
-- **Config**: `config/zramdedup.toml` — keep defaults conservative
+- **Config**: `config/animaksm.toml` — keep defaults conservative
 
 ## 9. Secrets
 No API keys/secrets in scope — dry-run mode is sufficient for local testing.

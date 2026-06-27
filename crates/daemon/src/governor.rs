@@ -20,13 +20,13 @@
 
 use std::time::{Duration, Instant};
 
+use animaksm_common::config::GovernorConfig;
+use animaksm_common::ksm::{KsmController, KsmStats};
+use animaksm_common::psi::{PressureLevel, PsiStats};
+use animaksm_common::SharedGovernorState;
 use tokio::sync::watch;
 use tokio::time;
 use tracing::{debug, info, warn};
-use zramdedup_common::config::GovernorConfig;
-use zramdedup_common::ksm::{KsmController, KsmStats};
-use zramdedup_common::psi::{PressureLevel, PsiStats};
-use zramdedup_common::SharedGovernorState;
 
 /// KSM profile for each aggressiveness level.
 ///
@@ -408,7 +408,7 @@ impl Governor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zramdedup_common::new_shared_state;
+    use animaksm_common::new_shared_state;
 
     /// Create a Governor with default config and a dry-run KSM controller.
     fn make_gov() -> Governor {
@@ -439,11 +439,11 @@ mod tests {
 
     fn psi(some_avg10: f32, full_avg10: f32) -> PsiStats {
         PsiStats {
-            some: zramdedup_common::psi::PsiLine {
+            some: animaksm_common::psi::PsiLine {
                 avg10: some_avg10,
                 ..Default::default()
             },
-            full: zramdedup_common::psi::PsiLine {
+            full: animaksm_common::psi::PsiLine {
                 avg10: full_avg10,
                 ..Default::default()
             },
@@ -525,7 +525,11 @@ mod tests {
     #[test]
     fn test_pressure_to_level_idle() {
         let gov = make_gov();
-        assert_eq!(gov.pressure_to_level(PressureLevel::Idle), 1, "Idle and Low both map to level 1 (minimal scanning)");
+        assert_eq!(
+            gov.pressure_to_level(PressureLevel::Idle),
+            1,
+            "Idle and Low both map to level 1 (minimal scanning)"
+        );
     }
 
     #[test]
@@ -562,7 +566,11 @@ mod tests {
         gov.current_level = 0;
 
         // Tick 1: counting
-        assert_eq!(gov.compute_transition(1), 0, "single-level ramp-up must wait for hysteresis");
+        assert_eq!(
+            gov.compute_transition(1),
+            0,
+            "single-level ramp-up must wait for hysteresis"
+        );
         assert_eq!(gov.ramp_up_count, 1);
 
         // Tick 2: counting
@@ -570,7 +578,11 @@ mod tests {
         assert_eq!(gov.ramp_up_count, 2);
 
         // Tick 3: threshold reached → ramp up
-        assert_eq!(gov.compute_transition(1), 1, "should ramp up after hysteresis readings");
+        assert_eq!(
+            gov.compute_transition(1),
+            1,
+            "should ramp up after hysteresis readings"
+        );
         assert_eq!(gov.ramp_up_count, 0, "ramp_up_count reset after ramp-up");
     }
 
@@ -608,7 +620,10 @@ mod tests {
 
         // Pressure drops back to idle → same level resets ramp_up_count
         let _ = gov.compute_transition(0);
-        assert_eq!(gov.ramp_up_count, 0, "ramp_up_count reset when target drops back");
+        assert_eq!(
+            gov.ramp_up_count, 0,
+            "ramp_up_count reset when target drops back"
+        );
 
         // Must restart hysteresis from scratch
         assert_eq!(gov.compute_transition(1), 0);
@@ -629,7 +644,10 @@ mod tests {
 
         // Pressure drops below current level → ramp-down logic, resets ramp_up_count
         let _ = gov.compute_transition(0);
-        assert_eq!(gov.ramp_up_count, 0, "ramp_up_count reset by ramp-down direction");
+        assert_eq!(
+            gov.ramp_up_count, 0,
+            "ramp_up_count reset by ramp-down direction"
+        );
     }
 
     // ── compute_transition (same level) ──────────────────────────────

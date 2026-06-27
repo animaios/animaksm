@@ -1,4 +1,4 @@
-//! Configuration schema for zramdedup, deserialized from TOML.
+//! Configuration schema for animaksm, deserialized from TOML.
 
 use serde::Deserialize;
 use std::path::Path;
@@ -6,14 +6,14 @@ use std::path::Path;
 /// Top-level configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct ZramdedupConfig {
+pub struct AnimaksmConfig {
     pub general: GeneralConfig,
     pub governor: GovernorConfig,
     pub scanner: ScannerConfig,
     pub swap_proxy: SwapProxyConfig,
 }
 
-impl ZramdedupConfig {
+impl AnimaksmConfig {
     /// Load configuration from a TOML file path.
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
@@ -73,7 +73,7 @@ impl Default for GeneralConfig {
         Self {
             log_level: "info".to_string(),
             poll_interval_ms: 2000,
-            state_dir: "/var/lib/zramdedup".to_string(),
+            state_dir: "/var/lib/animaksm".to_string(),
         }
     }
 }
@@ -141,7 +141,7 @@ impl Default for ScannerConfig {
             duplicate_ratio_threshold: 0.15,
             max_mergeable_per_process_mb: 512,
             blocklist: vec![
-                "zramdedup".to_string(),
+                "animaksm".to_string(),
                 "ksmd".to_string(),
                 "systemd".to_string(),
                 "sshd".to_string(),
@@ -175,7 +175,7 @@ impl Default for SwapProxyConfig {
             zram_backend: "/dev/zram0".to_string(),
             bloom_capacity: 1_000_000,
             bloom_false_positive_rate: 0.01,
-            page_store_path: "/var/lib/zramdedup/pagestore.dat".to_string(),
+            page_store_path: "/var/lib/animaksm/pagestore.dat".to_string(),
         }
     }
 }
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_default_config_validates() {
-        let cfg = ZramdedupConfig::default();
+        let cfg = AnimaksmConfig::default();
         assert!(cfg.validate().is_ok());
     }
 
@@ -207,7 +207,7 @@ enabled = false
 [swap_proxy]
 enabled = false
 "#;
-        let cfg: ZramdedupConfig = toml::from_str(toml_str).unwrap();
+        let cfg: AnimaksmConfig = toml::from_str(toml_str).unwrap();
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.general.log_level, "debug");
         assert_eq!(cfg.general.poll_interval_ms, 1000);
@@ -216,7 +216,7 @@ enabled = false
 
     #[test]
     fn test_validate_rejects_invalid_governor_thresholds() {
-        let mut cfg = ZramdedupConfig::default();
+        let mut cfg = AnimaksmConfig::default();
         cfg.governor.psi_some_threshold = -0.1;
         assert!(cfg
             .validate()
@@ -224,7 +224,7 @@ enabled = false
             .to_string()
             .contains("psi_some_threshold"));
 
-        cfg = ZramdedupConfig::default();
+        cfg = AnimaksmConfig::default();
         cfg.governor.psi_full_threshold = 101.0;
         assert!(cfg
             .validate()
@@ -235,7 +235,7 @@ enabled = false
 
     #[test]
     fn test_validate_rejects_invalid_governor_ranges() {
-        let mut cfg = ZramdedupConfig::default();
+        let mut cfg = AnimaksmConfig::default();
         cfg.governor.advisor_scan_time_range = (10, 10);
         assert!(cfg
             .validate()
@@ -243,7 +243,7 @@ enabled = false
             .to_string()
             .contains("advisor_scan_time_range"));
 
-        cfg = ZramdedupConfig::default();
+        cfg = AnimaksmConfig::default();
         cfg.governor.max_page_sharing_range = (1024, 256);
         assert!(cfg
             .validate()
@@ -254,7 +254,7 @@ enabled = false
 
     #[test]
     fn test_validate_rejects_invalid_scanner_values() {
-        let mut cfg = ZramdedupConfig::default();
+        let mut cfg = AnimaksmConfig::default();
         cfg.scanner.min_anon_rss_mb = 0;
         assert!(cfg
             .validate()
@@ -262,7 +262,7 @@ enabled = false
             .to_string()
             .contains("min_anon_rss_mb"));
 
-        cfg = ZramdedupConfig::default();
+        cfg = AnimaksmConfig::default();
         cfg.scanner.duplicate_ratio_threshold = 0.0;
         assert!(cfg
             .validate()
@@ -273,7 +273,7 @@ enabled = false
 
     #[test]
     fn test_validate_rejects_invalid_swap_proxy_values() {
-        let mut cfg = ZramdedupConfig::default();
+        let mut cfg = AnimaksmConfig::default();
         cfg.swap_proxy.device_size_gb = 0;
         assert!(cfg
             .validate()
@@ -281,7 +281,7 @@ enabled = false
             .to_string()
             .contains("device_size_gb"));
 
-        cfg = ZramdedupConfig::default();
+        cfg = AnimaksmConfig::default();
         cfg.swap_proxy.dedup_table_max_entries = 0;
         assert!(cfg
             .validate()

@@ -1,13 +1,13 @@
 [Unit]
-Description=Zramdedup KSM Governor and Memory Scanner
+Description=Animaksm KSM Governor and Memory Scanner
 Documentation=https://github.com/animaios/animaksm
 After=local-fs.target
 ConditionPathExists=/sys/kernel/mm/ksm
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/zramdedup run --config /etc/zramdedup.toml
-ExecStopPost=-/usr/local/bin/zramdedup restore-ksm --config /etc/zramdedup.toml
+ExecStart=/usr/local/bin/animaksm run --config /etc/animaksm.toml
+ExecStopPost=-/usr/local/bin/animaksm restore-ksm --config /etc/animaksm.toml
 Restart=on-failure
 RestartSec=5
 
@@ -19,8 +19,8 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 # /sys/kernel/mm/ksm must be read-write for governor + scanner
-ReadWritePaths=/var/lib/zramdedup /sys/kernel/mm/ksm
-ReadOnlyPaths=/proc/pressure /etc/zramdedup.toml
+ReadWritePaths=/var/lib/animaksm /sys/kernel/mm/ksm
+ReadOnlyPaths=/proc/pressure /etc/animaksm.toml
 RestrictNamespaces=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=no

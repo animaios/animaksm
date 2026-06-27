@@ -1,7 +1,7 @@
-//! zramdedup-common: Shared library for zramdedup components.
+//! animaksm-common: Shared library for animaksm components.
 //!
 //! Provides PSI monitoring, KSM control, process analysis, and
-//! configuration management for the zramdedup memory optimization system.
+//! configuration management for the animaksm memory optimization system.
 
 pub mod config;
 pub mod error;

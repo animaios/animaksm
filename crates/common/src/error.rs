@@ -1,10 +1,10 @@
-//! Unified error types for zramdedup.
+//! Unified error types for animaksm.
 
 use std::path::PathBuf;
 
-/// All errors that can occur in the zramdedup system.
+/// All errors that can occur in the animaksm system.
 #[derive(Debug, thiserror::Error)]
-pub enum ZramdedupError {
+pub enum AnimaksmError {
     #[error("sysfs I/O error on {path}: {source}")]
     Sysfs {
         path: PathBuf,
@@ -44,4 +44,4 @@ pub enum ZramdedupError {
     Nix(#[from] nix::Error),
 }
 
-pub type Result<T> = std::result::Result<T, ZramdedupError>;
+pub type Result<T> = std::result::Result<T, AnimaksmError>;

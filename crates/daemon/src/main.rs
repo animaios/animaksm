@@ -1,4 +1,4 @@
-//! zramdedup daemon: PSI-aware KSM governor + process scanner.
+//! animaksm daemon: PSI-aware KSM governor + process scanner.
 //!
 //! Trades CPU cycles for effective RAM by dynamically tuning KSM
 //! scanning aggressiveness based on memory pressure, and proactively
@@ -18,13 +18,13 @@ use tokio::sync::watch;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use zramdedup_common::config::ZramdedupConfig;
-use zramdedup_common::ksm::{KsmConfig, KsmController, KsmStats};
-use zramdedup_common::new_shared_state;
-use zramdedup_common::psi::PsiStats;
+use animaksm_common::config::AnimaksmConfig;
+use animaksm_common::ksm::{KsmConfig, KsmController, KsmStats};
+use animaksm_common::new_shared_state;
+use animaksm_common::psi::PsiStats;
 
 #[derive(Parser)]
-#[command(name = "zramdedup", about = "CPU-for-RAM memory optimization daemon")]
+#[command(name = "animaksm", about = "CPU-for-RAM memory optimization daemon")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -32,10 +32,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the zramdedup daemon
+    /// Start the animaksm daemon
     Run {
         /// Path to configuration file
-        #[arg(short, long, default_value = "/etc/zramdedup.toml")]
+        #[arg(short, long, default_value = "/etc/animaksm.toml")]
         config: PathBuf,
 
         /// Dry-run mode: log actions without executing sysfs writes or madvise calls
@@ -45,13 +45,13 @@ enum Commands {
     /// Show current status
     Status {
         /// Path to configuration file
-        #[arg(short, long, default_value = "/etc/zramdedup.toml")]
+        #[arg(short, long, default_value = "/etc/animaksm.toml")]
         config: PathBuf,
     },
     /// Restore KSM parameters from snapshot
     RestoreKsm {
         /// Path to configuration file
-        #[arg(short, long, default_value = "/etc/zramdedup.toml")]
+        #[arg(short, long, default_value = "/etc/animaksm.toml")]
         config: PathBuf,
     },
 }
@@ -90,7 +90,7 @@ where
         dry_run,
         governor_enabled = config.governor.enabled,
         scanner_enabled = config.scanner.enabled,
-        "zramdedup starting"
+        "animaksm starting"
     );
 
     // Initialize KSM controller
@@ -203,7 +203,7 @@ where
         }
     }
 
-    info!("zramdedup shutdown complete");
+    info!("animaksm shutdown complete");
     Ok(())
 }
 
@@ -243,7 +243,7 @@ fn build_status_output(config_path: &Path, psi_path: &Path) -> anyhow::Result<St
 
 fn format_status(cfg: &KsmConfig, stats: &KsmStats, psi: &PsiStats) -> String {
     format!(
-        "=== zramdedup status ===\n\
+        "=== animaksm status ===\n\
          \n\
          KSM Configuration:\n\
            run:                    {}\n\
@@ -295,7 +295,7 @@ async fn restore_ksm(config_path: PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn restore_ksm_from_config(config: &ZramdedupConfig) -> anyhow::Result<()> {
+fn restore_ksm_from_config(config: &AnimaksmConfig) -> anyhow::Result<()> {
     let mut ksm = KsmController::new(&config.governor.ksm_path)?;
     let state_dir = PathBuf::from(&config.general.state_dir);
     ksm.restore(&state_dir)?;
@@ -325,15 +325,15 @@ fn init_tracing(log_level: &str) {
 }
 
 /// Load config from path or return defaults (with info log if file missing).
-fn load_config_or_default(config_path: &Path) -> anyhow::Result<ZramdedupConfig> {
+fn load_config_or_default(config_path: &Path) -> anyhow::Result<AnimaksmConfig> {
     if config_path.exists() {
-        Ok(ZramdedupConfig::load(config_path)?)
+        Ok(AnimaksmConfig::load(config_path)?)
     } else {
         info!(
             path = %config_path.display(),
             "Config file not found, using defaults"
         );
-        Ok(ZramdedupConfig::default())
+        Ok(AnimaksmConfig::default())
     }
 }
 
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn test_load_config_or_default_nonexistent_returns_default() {
-        let path = PathBuf::from("/nonexistent/path/zramdedup.toml");
+        let path = PathBuf::from("/nonexistent/path/animaksm.toml");
         let config = load_config_or_default(&path).unwrap();
         assert_eq!(config.governor.stabilization_secs, 30);
         assert_eq!(config.general.log_level, "info");
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn test_load_config_or_default_reads_existing_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("zramdedup.toml");
+        let path = dir.path().join("animaksm.toml");
         std::fs::write(
             &path,
             "[general]\nlog_level = \"debug\"\n\n[scanner]\nenabled = false\n",
@@ -450,12 +450,12 @@ mod tests {
             ..Default::default()
         };
         let psi = PsiStats {
-            some: zramdedup_common::psi::PsiLine {
+            some: animaksm_common::psi::PsiLine {
                 avg10: 1.25,
                 avg60: 2.5,
                 ..Default::default()
             },
-            full: zramdedup_common::psi::PsiLine {
+            full: animaksm_common::psi::PsiLine {
                 avg10: 0.5,
                 avg60: 0.75,
                 ..Default::default()
@@ -486,7 +486,7 @@ mod tests {
         )
         .unwrap();
 
-        let config_path = dir.path().join("zramdedup.toml");
+        let config_path = dir.path().join("animaksm.toml");
         write_config(&config_path, &ksm_dir, &state_dir);
 
         let output = build_status_output(&config_path, &psi_path).unwrap();
@@ -508,7 +508,7 @@ mod tests {
         std::fs::create_dir(&ksm_dir).unwrap();
         seed_ksm_dir(&ksm_dir);
 
-        let config_path = dir.path().join("zramdedup.toml");
+        let config_path = dir.path().join("animaksm.toml");
         write_config(&config_path, &ksm_dir, &state_dir);
 
         show_status(config_path).await.unwrap();
@@ -527,7 +527,7 @@ mod tests {
         std::fs::write(ksm_dir.join("run"), "0").unwrap();
         std::fs::write(ksm_dir.join("pages_to_scan"), "100").unwrap();
 
-        let config_path = dir.path().join("zramdedup.toml");
+        let config_path = dir.path().join("animaksm.toml");
         write_config(&config_path, &ksm_dir, &state_dir);
 
         restore_ksm(config_path).await.unwrap();
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn test_restore_ksm_from_config_errors_for_missing_ksm_path() {
-        let mut config = ZramdedupConfig::default();
+        let mut config = AnimaksmConfig::default();
         config.governor.ksm_path = "/nonexistent/ksm/path".into();
         let err = restore_ksm_from_config(&config).unwrap_err();
         assert!(err.to_string().contains("KSM path not found"));
@@ -555,7 +555,7 @@ mod tests {
         std::fs::create_dir(&ksm_dir).unwrap();
         seed_ksm_dir(&ksm_dir);
 
-        let config_path = dir.path().join("zramdedup.toml");
+        let config_path = dir.path().join("animaksm.toml");
         write_daemon_config(&config_path, &ksm_dir, &state_dir);
 
         run_daemon_with_shutdown(config_path, true, async { Ok("test") })
@@ -573,7 +573,7 @@ mod tests {
         std::fs::create_dir(&ksm_dir).unwrap();
         seed_ksm_dir(&ksm_dir);
 
-        let config_path = dir.path().join("zramdedup.toml");
+        let config_path = dir.path().join("animaksm.toml");
         write_daemon_config(&config_path, &ksm_dir, &state_dir);
 
         run_daemon_with_shutdown(config_path, false, async { Ok("SIGTERM") })
@@ -592,7 +592,7 @@ mod tests {
         std::fs::create_dir(&ksm_dir).unwrap();
         seed_ksm_dir(&ksm_dir);
 
-        let config_path = dir.path().join("zramdedup.toml");
+        let config_path = dir.path().join("animaksm.toml");
         write_daemon_config_all_enabled(&config_path, &ksm_dir, &state_dir);
 
         run_daemon_with_shutdown(config_path.clone(), true, async { Ok("SIGINT") })
@@ -611,7 +611,7 @@ mod tests {
         std::fs::create_dir(&ksm_dir).unwrap();
         seed_ksm_dir(&ksm_dir);
 
-        let config_path = dir.path().join("zramdedup.toml");
+        let config_path = dir.path().join("animaksm.toml");
         write_daemon_config_all_enabled(&config_path, &ksm_dir, &state_dir);
 
         run_daemon_with_shutdown(config_path, false, async { Ok("SIGTERM") })
@@ -635,33 +635,28 @@ mod tests {
     #[test]
     fn test_cli_parses_run_status_and_restore_commands() {
         let run = Cli::try_parse_from([
-            "zramdedup",
+            "animaksm",
             "run",
             "--config",
-            "/tmp/zramdedup.toml",
+            "/tmp/animaksm.toml",
             "--dry-run",
         ])
         .unwrap();
         match run.command {
             Commands::Run { config, dry_run } => {
-                assert_eq!(config, PathBuf::from("/tmp/zramdedup.toml"));
+                assert_eq!(config, PathBuf::from("/tmp/animaksm.toml"));
                 assert!(dry_run);
             }
             _ => panic!("expected run command"),
         }
 
         let status =
-            Cli::try_parse_from(["zramdedup", "status", "--config", "/tmp/zramdedup.toml"])
-                .unwrap();
+            Cli::try_parse_from(["animaksm", "status", "--config", "/tmp/animaksm.toml"]).unwrap();
         assert!(matches!(status.command, Commands::Status { .. }));
 
-        let restore = Cli::try_parse_from([
-            "zramdedup",
-            "restore-ksm",
-            "--config",
-            "/tmp/zramdedup.toml",
-        ])
-        .unwrap();
+        let restore =
+            Cli::try_parse_from(["animaksm", "restore-ksm", "--config", "/tmp/animaksm.toml"])
+                .unwrap();
         assert!(matches!(restore.command, Commands::RestoreKsm { .. }));
     }
 }

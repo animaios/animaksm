@@ -1,4 +1,4 @@
-//! zramdedup-swap-proxy: Experimental deduplicating swap proxy.
+//! animaksm-swap-proxy: Experimental deduplicating swap proxy.
 //!
 //! Sits between the kernel swap subsystem and zram, deduplicating
 //! identical pages before they reach compressed storage. Uses
@@ -25,7 +25,7 @@ use fingerprint::{fingerprint_page, PAGE_SIZE};
 
 #[derive(Parser)]
 #[command(
-    name = "zramdedup-swap-proxy",
+    name = "animaksm-swap-proxy",
     about = "Experimental deduplicating swap proxy"
 )]
 struct Cli {
@@ -38,7 +38,7 @@ enum Commands {
     /// Start the swap proxy
     Run {
         /// Path to page store file (or block device)
-        #[arg(long, default_value = "/var/lib/zramdedup/pagestore.dat")]
+        #[arg(long, default_value = "/var/lib/animaksm/pagestore.dat")]
         store_path: PathBuf,
 
         /// Device size in GB
@@ -56,7 +56,7 @@ enum Commands {
     /// Show proxy statistics
     Stats {
         /// Path to page store file
-        #[arg(long, default_value = "/var/lib/zramdedup/pagestore.dat")]
+        #[arg(long, default_value = "/var/lib/animaksm/pagestore.dat")]
         store_path: PathBuf,
     },
     /// Clean up after a proxy crash
@@ -228,7 +228,7 @@ impl ProxyEngine {
             0.0
         };
 
-        println!("=== zramdedup swap proxy statistics ===");
+        println!("=== animaksm swap proxy statistics ===");
         println!();
         println!("Write Operations:");
         println!("  Total writes:         {total_w}");
@@ -333,7 +333,7 @@ fn run_proxy(
         size_gb,
         max_entries,
         dry_run,
-        "zramdedup-swap-proxy starting"
+        "animaksm-swap-proxy starting"
     );
 
     if dry_run {
@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn test_cli_parses_run_stats_and_cleanup_commands() {
         let run = Cli::try_parse_from([
-            "zramdedup-swap-proxy",
+            "animaksm-swap-proxy",
             "run",
             "--store-path",
             "/tmp/store.dat",
@@ -510,7 +510,7 @@ mod tests {
         }
 
         let stats = Cli::try_parse_from([
-            "zramdedup-swap-proxy",
+            "animaksm-swap-proxy",
             "stats",
             "--store-path",
             "/tmp/store.dat",
@@ -518,7 +518,7 @@ mod tests {
         .unwrap();
         assert!(matches!(stats.command, Commands::Stats { .. }));
 
-        let cleanup = Cli::try_parse_from(["zramdedup-swap-proxy", "cleanup"]).unwrap();
+        let cleanup = Cli::try_parse_from(["animaksm-swap-proxy", "cleanup"]).unwrap();
         assert!(matches!(cleanup.command, Commands::Cleanup));
     }
 

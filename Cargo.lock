@@ -12,6 +12,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "animaksm-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "nix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "animaksm-daemon"
+version = "0.1.0"
+dependencies = [
+ "animaksm-common",
+ "anyhow",
+ "clap",
+ "libc",
+ "nix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-journald",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "animaksm-swap-proxy"
+version = "0.1.0"
+dependencies = [
+ "animaksm-common",
+ "anyhow",
+ "clap",
+ "crossbeam",
+ "dashmap",
+ "libc",
+ "nix",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-journald",
+ "tracing-subscriber",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -63,9 +119,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "bitflags"
@@ -828,59 +884,3 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
-
-[[package]]
-name = "zramdedup-common"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libc",
- "nix",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "toml",
- "tracing",
-]
-
-[[package]]
-name = "zramdedup-daemon"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "libc",
- "nix",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-journald",
- "tracing-subscriber",
- "zramdedup-common",
-]
-
-[[package]]
-name = "zramdedup-swap-proxy"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "crossbeam",
- "dashmap",
- "libc",
- "nix",
- "parking_lot",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-journald",
- "tracing-subscriber",
- "xxhash-rust",
- "zramdedup-common",
-]

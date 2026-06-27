@@ -20,12 +20,12 @@
 
 use std::time::{Duration, Instant};
 
+use animaksm_common::config::ScannerConfig;
+use animaksm_common::procfs::{self, KsmProcStat, MapsEntry, ProcessStatus};
+use animaksm_common::SharedGovernorState;
 use tokio::sync::watch;
 use tokio::time;
 use tracing::{debug, info, warn};
-use zramdedup_common::config::ScannerConfig;
-use zramdedup_common::procfs::{self, KsmProcStat, MapsEntry, ProcessStatus};
-use zramdedup_common::SharedGovernorState;
 
 use crate::madvise;
 
@@ -310,7 +310,7 @@ impl Scanner {
         // Opportunistic MADV_COLLAPSE: if KSM has been unmerging pages
         // (high pages_volatile), try to re-promote large regions to THPs
         // for TLB efficiency. Only on processes we already touched.
-        if let Ok(ksm_stats) = zramdedup_common::ksm::KsmController::new("/sys/kernel/mm/ksm") {
+        if let Ok(ksm_stats) = animaksm_common::ksm::KsmController::new("/sys/kernel/mm/ksm") {
             if let Ok(stats) = ksm_stats.read_stats() {
                 if stats.pages_volatile > 1000 {
                     for (pid, maps) in &targets {
@@ -356,10 +356,10 @@ impl Scanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use animaksm_common::config::ScannerConfig;
+    use animaksm_common::GovernorState;
     use std::sync::Arc;
     use tokio::sync::RwLock;
-    use zramdedup_common::config::ScannerConfig;
-    use zramdedup_common::GovernorState;
 
     // ── Integration: scanner not blocked by governor actions ──────────
 
@@ -487,7 +487,7 @@ mod tests {
     fn test_l1_candidate_filters_kernel_small_and_blocklisted_processes() {
         let config = ScannerConfig {
             min_anon_rss_mb: 100,
-            blocklist: vec!["zramdedup".into()],
+            blocklist: vec!["animaksm".into()],
             ..ScannerConfig::default()
         };
 
@@ -516,7 +516,7 @@ mod tests {
         assert!(l1_candidate_from_status(
             ProcessStatus {
                 pid: 101,
-                name: "zramdedup-daemon".into(),
+                name: "animaksm-daemon".into(),
                 vm_anon_kb: 500 * 1024,
                 ..Default::default()
             },

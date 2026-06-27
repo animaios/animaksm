@@ -19,8 +19,8 @@
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
 
+use animaksm_common::procfs::MapsEntry;
 use tracing::{debug, info};
-use zramdedup_common::procfs::MapsEntry;
 
 /// MADV_MERGEABLE constant (from linux/mman.h).
 const MADV_MERGEABLE: libc::c_int = 12;
@@ -403,7 +403,7 @@ fn errno_to_str(errno: i32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zramdedup_common::procfs::MapsEntry;
+    use animaksm_common::procfs::MapsEntry;
 
     // ── build_batch ──────────────────────────────────────────────────────
 
