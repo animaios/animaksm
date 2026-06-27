@@ -1,23 +1,23 @@
 [Unit]
 Description=Zramdedup KSM Governor and Memory Scanner
-Documentation=https://github.com/animadai/zramdedup
+Documentation=https://github.com/animaios/animaksm
 After=local-fs.target
 ConditionPathExists=/sys/kernel/mm/ksm
 
 [Service]
 Type=simple
-User=root
-Group=root
 ExecStart=/usr/local/bin/zramdedup run --config /etc/zramdedup.toml
 ExecStopPost=-/usr/local/bin/zramdedup restore-ksm --config /etc/zramdedup.toml
 Restart=on-failure
 RestartSec=5
 
-# Security: limit what the root process can do outside KSM tuning.
+# Security: limit what the process can do outside KSM tuning.
+NoNewPrivileges=yes
+AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/var/lib/zramdedup
 # /sys/kernel/mm/ksm must be read-write for governor + scanner
 ReadWritePaths=/var/lib/zramdedup /sys/kernel/mm/ksm
 ReadOnlyPaths=/proc/pressure /etc/zramdedup.toml
@@ -25,6 +25,10 @@ RestrictNamespaces=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=no
 RemoveIPC=yes
+
+# Resource limits
+MemoryMax=32M
+Nice=19
 
 [Install]
 WantedBy=multi-user.target

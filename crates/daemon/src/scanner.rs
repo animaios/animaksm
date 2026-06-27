@@ -127,27 +127,16 @@ where
         return Vec::new();
     }
 
-    let mut l2_candidates: Vec<Candidate> = Vec::new();
+    let mut l25_candidates: Vec<Candidate> = Vec::new();
+    let mut l2_passed_count = 0u64;
 
     for candidate in l1_candidates {
         let ksm_stat = read_ksm_stat(candidate.pid);
         if !passes_l2_already_merged_filter(ksm_stat.as_ref()) {
             continue;
         }
-        l2_candidates.push(candidate);
-    }
+        l2_passed_count += 1;
 
-    stats.processes_filtered_l2 += l2_candidates.len() as u64;
-
-    if l2_candidates.is_empty() {
-        debug!("All Level 1 candidates already KSM-enabled");
-        return Vec::new();
-    }
-
-    let mut l25_candidates: Vec<Candidate> = Vec::new();
-
-    for candidate in l2_candidates {
-        let ksm_stat = read_ksm_stat(candidate.pid);
         if !passes_l25_profit_filter(ksm_stat.as_ref()) {
             stats.processes_filtered_l25_profit += 1;
             debug!(
@@ -160,8 +149,10 @@ where
         l25_candidates.push(candidate);
     }
 
+    stats.processes_filtered_l2 += l2_passed_count;
+
     if l25_candidates.is_empty() {
-        debug!("All candidates filtered by negative KSM profit");
+        debug!("All candidates filtered by KSM status or negative profit");
         return Vec::new();
     }
 
