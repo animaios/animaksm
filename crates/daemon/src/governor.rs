@@ -303,7 +303,9 @@ impl Governor {
     fn compute_transition(&mut self, target_level: u8) -> u8 {
         if target_level > self.current_level {
             // Multi-level jump (emergency): ramp immediately
-            if target_level >= self.current_level + 2 {
+            // Use saturating_add so this is safe if current_level is near u8::MAX
+            // (in practice current_level is capped at 5 by PROFILES).
+            if target_level >= self.current_level.saturating_add(2) {
                 self.hysteresis_count = 0;
                 self.ramp_up_count = 0;
                 self.level_entered_at = Instant::now();
