@@ -39,18 +39,30 @@ cargo run -p animaksm-daemon -- run --config config/animaksm.toml --dry-run
 Repo: `animaksm` (indexed). Symbol ID: `{file_path}::{qualified_name}#{kind}`
 
 ### 4.1 Core lookup
+- `resolve_repo(path=".")` — confirm repo is indexed. If not: `index_folder(path=".")`
 - `assemble_task_context(repo="animaksm", task="...")` — opening move; auto-classifies intent (explore/debug/refactor/extend/audit/review), surfaces symbols + ranked context
 - `get_file_outline` → `get_symbol_source` / `get_context_bundle(symbol_ids=[...])` — targeted retrieval, never full files
 - `search_symbols(repo="animaksm", query="...")` — find by name, signature, summary
   - `mode="context"` — query-less ranked context assembly
   - `mode="winnow"` — multi-axis constraint filter (kind, language, complexity, churn, etc.)
   - `semantic=true` — embedding-based search (requires embed provider)
+  - `detail_level="compact"` — 15 tokens/row (id/name/kind/file/line only), ideal for broad discovery
 - `search_text(repo="animaksm", query="...")` — full-text search across file contents (string literals, comments, configs)
 - `search_ast(repo="animaksm", pattern="..." | category="...")` — structural anti-pattern scan (empty_catch, god_function, hardcoded_secret, etc.)
 
 ### 4.2 Impact & safety
 - `get_blast_radius(symbol="...", include_source=true)` — check impact before changes
-- `find_references` / `get_call_hierarchy` — trace who uses a symbol
+  - `call_depth=N` — also find symbols that *call* this symbol (call-level analysis, max 3)
+  - `include_decisions=true` — surface git commit intent (revert/perf/refactor/bugfix) from history
+  - `source_budget=N` — max tokens for source snippets across all files (default 8000)
+- `find_references(identifier="...", cross_repo=false)` — trace who uses a symbol
+  - `mode="importers"` — find files importing a given file (former `find_importers`)
+  - `mode="related"` — find symbols related to a given symbol (former `get_related_symbols`)
+  - `quick=true` — lightweight `is_referenced` boolean check for fast dead-code detection
+- `get_call_hierarchy(symbol_id="...")` — incoming callers / outgoing callees
+  - `chains=true` — also discover signal chains (HTTP routes, CLI commands, events)
+  - `kind="http"|"cli"|"event"|"task"|"main"|"test"` — filter chain gateways
+  - `max_depth=N` — BFS depth limit per chain (1–8, default 5)
 - `check_safe(repo="animaksm", symbol="...", mode="edit"|"delete")` — composite preflight: can this symbol be safely edited/deleted?
 - `plan_refactoring(repo="animaksm", symbol="...", refactor_type="rename"|"move"|"extract"|"signature")` — generate multi-file edit plan before refactoring
 - `get_changed_symbols(repo="animaksm")` — map git diff to affected symbols
@@ -74,12 +86,68 @@ Repo: `animaksm` (indexed). Symbol ID: `{file_path}::{qualified_name}#{kind}`
 ### 4.4 Runtime & indexing
 - `import_runtime_signal(repo="animaksm", path="...", source="otel"|"sql_log"|"stack_log")` — ingest runtime traces
 - `embed_repo(repo="animaksm")` — precompute symbol embeddings for semantic search
+  - `force=true` — recompute all embeddings even if they already exist
+  - `batch_size=N` — symbols per embedding batch (default 50)
 - `summarize_repo(repo="animaksm", force=true)` — re-run AI summarization pipeline
 - `index_file(path="...")` — surgical single-file reindex after edits
 - `index_folder(path="...")` / `index_repo(url="...")` — full index/reindex
 - `register_edit(repo="animaksm", file_paths=[...], reindex=true)` — invalidate caches after file edits
+- `get_repo_map(repo="animaksm", mode="outline")` — lightweight directory/language/symbol count overview
 
-### 4.5 Power User Guide
+### 4.5 Code Exploration Policy
+
+**Always use jCodemunch-MCP tools for code navigation. Never fall back to `read_file`, `grep`, `find_path`, or shell commands for code exploration.**
+
+- Use `search_symbols`, `get_context_bundle`, `get_symbol_source` for symbol lookup and retrieval
+- Use `assemble_task_context` as your opening move — it auto-classifies intent and returns ranked context
+- Use `search_text` only for non-symbol content (string literals, comments, config values)
+- **Exception:** Use `read_file` when you need to edit a file (you must see the exact text to produce correct edits)
+- **Exception:** Use `find_path` when you need to discover file paths by name pattern (not by content)
+
+Rationale: `read_file`/`grep` for exploration wastes tokens, returns no structural context, and produces poor decisions. The index understands signatures, imports, types, and call graphs — flat text search does not.
+
+### 4.6 Session-Aware Routing — Confidence & Negative Evidence
+
+After every jCodemunch tool call, check the response envelope before deciding what to do next:
+
+| `_meta.confidence` | Action |
+|---|---|
+| **high** (≥ 0.7) | Act directly on the result. Max 2 supplementary `read_file` calls for edit verification. |
+| **medium** (0.4–0.69) | Explore the recommended files. Max 5 `read_file` calls; then commit or report. |
+| **low** (< 0.4) | **Do not keep searching.** Report the gap, suggest re-indexing, and ask the user for direction. |
+
+**Negative evidence — stop, don't re-search:**
+- If a search returns `verdict: "no_implementation_found"`, **stop.** Do not re-search with different terms, different capitalization, or broader patterns. An absent implementation is a valid finding — report it.
+- If `resolve_repo` or `list_repos` shows the repo is not indexed, **index first** (`index_folder`), then retry. Do not work around a missing index with `grep`.
+- If `_meta.freshness` indicates stale data or `repo_is_stale=true`, suggest `index_folder` before trusting the results.
+
+### 4.7 After Editing Files
+
+Every file edit must be followed by cache invalidation:
+```
+register_edit(repo="animaksm", file_paths=["crates/common/src/foo.rs"], reindex=true)
+```
+This clears the BM25 cache and search result cache so subsequent tool calls in the same session reflect the change. Without it, later `search_symbols` / `search_text` calls return stale data.
+
+For surgical reindex of a single file (lighter than full `register_edit`):
+```
+index_file(path="/absolute/path/to/crates/common/src/foo.rs")
+```
+
+### 4.8 Interpreting Search Results
+
+jCodemunch responses include metadata fields that inform decision-making:
+
+| Field | Meaning | Action |
+|---|---|---|
+| `_meta.confidence` | Result quality score (0.0–1.0) | See §4.6 routing table |
+| `_meta.freshness` | Index staleness indicator | If stale, suggest `index_folder` |
+| `_meta.tokens_used` / `_meta.tokens_remaining` | Token budget consumption | Adjust budget on next call if exhausted |
+| `verdict: "no_implementation_found"` | No matching implementation exists | **Stop searching** — report the gap |
+| `repo_is_stale` | Index was built from an older commit | Re-index before trusting blast radius / reference data |
+| `source_truncated: true` | Symbol body was truncated (bounded mode) | Use `get_symbol_source` without bounds if you need the full body |
+
+### 4.9 Power User Guide
 
 #### Golden Rules
 1. **Always start with `assemble_task_context`** — it auto-classifies intent and returns ranked symbols + context in one call. Never manually hunt for entry points.
@@ -149,9 +217,9 @@ search_ast(repo="animaksm", pattern="string:/password/i")      # custom pattern
 | Tool | Key params | When to use |
 |---|---|---|
 | `assemble_task_context` | `task`, `token_budget` (8k default) | **First call for any task** — returns intent, symbols, context |
-| `search_symbols` | `mode`, `semantic`, `fusion`, `token_budget` | Symbol discovery; `mode=context` = ranked context w/o query |
+| `search_symbols` | `mode`, `semantic`, `fusion`, `token_budget`, `detail_level` | Symbol discovery; `mode=context` = ranked context w/o query |
 | `get_context_bundle` | `symbol_ids[]`, `budget_strategy`, `token_budget` | Multi-symbol context in one call; `core_first` keeps primary symbol |
-| `get_blast_radius` | `depth`, `include_source`, `include_depth_scores` | Pre-edit impact; `include_depth_scores` = per-hop risk |
+| `get_blast_radius` | `depth`, `include_source`, `include_depth_scores`, `call_depth`, `include_decisions`, `source_budget` | Pre-edit impact; `include_depth_scores` = per-hop risk |
 | `check_safe` | `mode` (edit/delete), `include_runtime` | Preflight — returns verdict + top-5 blockers |
 | `plan_refactoring` | `refactor_type`, `new_name`/`new_file`/`new_signature` | Returns `{old_text, new_text}` blocks ready for Edit tool |
 | `get_repo_health` | `detailed`, `rules` (layer defs) | One-call triage; `detailed=true` adds cycles, coupling, hotspots |
@@ -161,6 +229,11 @@ search_ast(repo="animaksm", pattern="string:/password/i")      # custom pattern
 | `search_ast` | `category`, `pattern`, `language` | Anti-pattern sweep; `category=all` runs everything |
 | `get_changed_symbols` | `since_sha`, `until_sha`, `include_blast_radius` | Maps git diff → symbols + downstream impact |
 | `get_pr_risk_profile` | `base_ref`, `head_ref`, `days` | Composite risk score (blast + complexity + churn + tests + volume) |
+| `find_references` | `mode` (refs/importers/related), `quick`, `include_call_chain` | Import sites + dbt refs + call chain; `quick=true` for dead code |
+| `get_call_hierarchy` | `chains`, `kind`, `max_depth`, `include_impact` | Call graph + signal chains (HTTP/CLI/event) |
+| `embed_repo` | `force`, `batch_size` | Warm embedding cache for semantic search |
+| `get_repo_map` | `mode` (map/outline), `group_by` (file/flat), `top_n` | Cold-start orientation; `mode=outline` = lightweight overview |
+| `resolve_repo` | `path` | First call in new workspace — confirm repo is indexed |
 
 #### Anti-patterns to Avoid
 - ❌ Reading full files with `read_file` — use `get_context_bundle` or `get_symbol_source`
@@ -169,6 +242,7 @@ search_ast(repo="animaksm", pattern="string:/password/i")      # custom pattern
 - ❌ Not verifying with `verify=true` — index can drift from working tree
 - ❌ Using `grep` for symbol lookup — `search_symbols` understands signatures, imports, types
 - ❌ Manual blast radius tracing — `get_blast_radius(depth=2, include_source=true)` is instant
+- ❌ Ignoring `_meta.confidence` < 0.4 — low confidence means widen the search or report a gap, not proceed as-is
 
 #### Pro Tips
 - **`fusion=true` on `search_symbols`** — uses Weighted Reciprocal Rank across lexical/structural/similarity/identity channels; best for vague queries
