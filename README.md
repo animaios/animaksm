@@ -1,12 +1,14 @@
 # AnimaKSMD
 
 > **The spiritual successor to uksmd — a modern, Rust-based userspace KSM daemon with PTrace-powered MADV_MERGEABLE injection.**
-
+<!--
 [![Crates.io](https://img.shields.io/crates/v/animaksm-daemon.svg)](https://crates.io/crates.io/crates/animaksm-daemon)
 [![Documentation](https://docs.rs/animaksm-daemon/badge.svg)](https://docs.rs/animaksm-daemon)
-[![License](https://img.shields.io/badge/license-MIT%2FApache-2.0-blue.svg)](LICENSE)
-[![Build Status](https://github.com/animaios/animaksm/workflows/CI/badge.svg)](https://github.com/animaios/animaksm/actions)
-[![Matrix](https://img.shields.io/matrix/animaksm:matrix.org?label=chat&logo=matrix)](https://matrix.to/#/#animaksm:matrix.org)
+-->
+
+[![DeepSource](https://app.deepsource.com/gh/animaios/animaksmd.svg/?label=code+coverage&show_trend=true&token=iBvsQ1aAT0R9zi6jTngKW_VR)](https://app.deepsource.com/gh/animaios/animaksmd/)[![Build Status](https://github.com/animaios/animaksm/workflows/CI/badge.svg)](https://github.com/animaios/animaksm/actions)
+[![DeepSource](https://app.deepsource.com/gh/animaios/animaksmd.svg/?label=active+issues&show_trend=true&token=iBvsQ1aAT0R9zi6jTngKW_VR)](https://app.deepsource.com/gh/animaios/animaksmd/)
+[![DeepSource](https://app.deepsource.com/gh/animaios/animaksmd.svg/?label=resolved+issues&show_trend=true&token=iBvsQ1aAT0R9zi6jTngKW_VR)](https://app.deepsource.com/gh/animaios/animaksmd/)
 
 ---
 
@@ -60,17 +62,17 @@ This is the **only way** to mark another process's memory as `MADV_MERGEABLE` fr
 ### Install (Arch Linux / CachyOS)
 ```bash
 # From AUR
-yay -S animaksm-git
+yay -S animaksmd-git
 
 # Or build from source
-cargo install --locked animaksm-daemon --git https://github.com/animaios/animaksm
+cargo install --locked animaksm-daemon --git https://github.com/animaios/animaksmd
 ```
 
 ### Install (Other Distros)
 ```bash
 # Build from source (requires Rust 1.75+)
-git clone https://github.com/animaios/animaksm
-cd animaksm
+git clone https://github.com/animaios/animaksmd
+cd animaksmd
 cargo build --release --bin animaksm
 sudo cp target/release/animaksm /usr/local/bin/
 sudo cp systemd/animaksm.service /etc/systemd/system/
@@ -166,9 +168,9 @@ animaksm_governor_level 1
 # TYPE animaksm_psi_pressure gauge
 animaksm_psi_pressure{level="low"} 1
 ```
-
+<!--
 **Grafana Dashboard**: Import [AnimaKSMD Dashboard](https://grafana.com/grafana/dashboards/animaksm) (JSON available in `grafana/animaksm-dashboard.json`)
-
+-->
 ---
 
 ## Architecture
@@ -286,12 +288,15 @@ Dual-licensed under **MIT** or **Apache-2.0** at your option.
 
 ## Links
 
-- **Repository**: https://github.com/animaios/animaksm
-- **Issues**: https://github.com/animaios/animaksm/issues
-- **Discussions**: https://github.com/animaios/animaksm/discussions
+- **Repository**: https://github.com/animaios/animaksmd
+- **Issues**: https://github.com/animaios/animaksmd/issues
+
+<!--
+- **Discussions**: https://github.com/animaios/animaksmd/discussions
 - **Matrix Chat**: https://matrix.to/#/#animaksm:matrix.org
 - **Crates.io**: https://crates.io/crates/animaksm-daemon
 - **Documentation**: https://docs.rs/animaksm-daemon
+-->
 
 ---
 
