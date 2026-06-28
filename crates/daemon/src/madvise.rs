@@ -233,12 +233,19 @@ fn build_batch(eligible: &[&MapsEntry], max_bytes: u64) -> Vec<(u64, usize)> {
     let mut bytes_accumulated: u64 = 0;
 
     for region in eligible {
-        let size = region.size();
-        if bytes_accumulated + size > max_bytes {
+        if bytes_accumulated >= max_bytes || batch.len() >= MAX_IOV_BATCH {
             break;
         }
-        batch.push((region.start, size as usize));
-        bytes_accumulated += size;
+
+        let size = region.size();
+        let remaining = max_bytes - bytes_accumulated;
+        let len = size.min(remaining);
+        if len == 0 {
+            break;
+        }
+
+        batch.push((region.start, len as usize));
+        bytes_accumulated += len;
     }
 
     batch
@@ -677,10 +684,27 @@ mod tests {
             }, // 4KB
         ];
         let refs: Vec<&MapsEntry> = regions.iter().collect();
-        // max_bytes = 12KB → only first two regions fit (4KB + 16KB = 20KB > 12KB,
-        // so it stops after the first one)
+        // max_bytes = 12KB -> first region plus 8KB from the second region.
         let batch = build_batch(&refs, 12 * 1024);
-        assert_eq!(batch.len(), 1, "only first region should fit in 12KB cap");
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0], (0x10000, 0x1000usize));
+        assert_eq!(batch[1], (0x20000, 8 * 1024usize));
+    }
+
+    #[test]
+    fn test_build_batch_partially_marks_first_large_region() {
+        let regions = vec![MapsEntry {
+            start: 0x10000,
+            end: 0x90000,
+            perms: "rw-p".into(),
+            offset: 0,
+            dev: "00:00".into(),
+            inode: 0,
+            pathname: String::new(),
+        }];
+        let refs: Vec<&MapsEntry> = regions.iter().collect();
+        let batch = build_batch(&refs, 64 * 1024);
+        assert_eq!(batch, vec![(0x10000, 64 * 1024usize)]);
     }
 
     #[test]

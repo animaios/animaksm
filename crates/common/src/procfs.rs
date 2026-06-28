@@ -178,12 +178,12 @@ fn read_ksm_stat_from(proc_path: &Path, pid: u32) -> Result<KsmProcStat> {
     for line in content.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 2 {
-            match parts[0] {
+            match parts[0].trim_end_matches(':') {
                 "ksm_rmap_items" => stat.rmap_items = parts[1].parse().unwrap_or(0),
                 "ksm_merging_pages" => stat.merging_pages = parts[1].parse().unwrap_or(0),
                 "ksm_process_profit" => stat.process_profit = parts[1].parse().unwrap_or(0),
-                "ksm_merge_any" => stat.merge_any = parts[1] == "1" || parts[1] == "yes",
-                "ksm_mergeable" => stat.mergeable = parts[1] == "1" || parts[1] == "yes",
+                "ksm_merge_any" => stat.merge_any = parse_ksm_bool(parts[1]),
+                "ksm_mergeable" => stat.mergeable = parse_ksm_bool(parts[1]),
                 _ => {}
             }
         }
@@ -337,6 +337,13 @@ fn parse_kb_value(s: &str) -> u64 {
         .unwrap_or(0)
 }
 
+fn parse_ksm_bool(s: &str) -> bool {
+    matches!(
+        s.trim().trim_end_matches(',').to_ascii_lowercase().as_str(),
+        "1" | "yes" | "true"
+    )
+}
+
 fn parse_maps_line(line: &str) -> Option<MapsEntry> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     if parts.len() < 5 {
@@ -411,6 +418,15 @@ mod tests {
         // Invalid number → unwrap_or(0)
         assert_eq!(parse_kb_value("not_a_number"), 0);
         assert_eq!(parse_kb_value(""), 0);
+    }
+
+    #[test]
+    fn test_parse_ksm_bool() {
+        assert!(parse_ksm_bool("1"));
+        assert!(parse_ksm_bool("yes"));
+        assert!(parse_ksm_bool("true"));
+        assert!(!parse_ksm_bool("0"));
+        assert!(!parse_ksm_bool("no"));
     }
 
     // ── MapsEntry ───────────────────────────────────────────────────────
@@ -799,6 +815,28 @@ mod tests {
         assert_eq!(stat.merging_pages, 3);
         assert_eq!(stat.process_profit, -7);
         assert!(stat.merge_any);
+        assert!(stat.mergeable);
+    }
+
+    #[test]
+    fn test_read_ksm_stat_from_temp_proc_colon_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_dir = proc_pid(dir.path(), 123);
+        std::fs::write(
+            pid_dir.join("ksm_stat"),
+            "ksm_rmap_items: 10\n\
+             ksm_merging_pages: 3\n\
+             ksm_process_profit: -7\n\
+             ksm_merge_any: no\n\
+             ksm_mergeable: yes\n",
+        )
+        .unwrap();
+
+        let stat = read_ksm_stat_from(dir.path(), 123).unwrap();
+        assert_eq!(stat.rmap_items, 10);
+        assert_eq!(stat.merging_pages, 3);
+        assert_eq!(stat.process_profit, -7);
+        assert!(!stat.merge_any);
         assert!(stat.mergeable);
     }
 
