@@ -95,12 +95,6 @@ pub struct DedupTable {
     evictions: AtomicU64,
     /// Monotonic tick for LRU ordering.
     tick: AtomicU64,
-    /// Free list of backend page slots.
-    free_slots: crossbeam::queue::SegQueue<u64>,
-    /// Next slot to allocate if free list is empty.
-    next_slot: AtomicU64,
-    /// Maximum backend slots.
-    max_slots: u64,
 }
 
 impl DedupTable {
@@ -108,8 +102,7 @@ impl DedupTable {
     ///
     /// - `max_entries`: Maximum number of unique page fingerprints to track.
     /// - `bloom_capacity`: Approximate number of unique pages for bloom filter sizing.
-    /// - `max_backend_slots`: Maximum number of pages in the backend storage.
-    pub fn new(max_entries: u64, bloom_capacity: usize, max_backend_slots: u64) -> Self {
+    pub fn new(max_entries: u64, bloom_capacity: usize) -> Self {
         Self {
             map: DashMap::with_capacity(max_entries as usize),
             bloom: BloomFilter::new(bloom_capacity),
@@ -120,9 +113,6 @@ impl DedupTable {
             bloom_false_positives: AtomicU64::new(0),
             evictions: AtomicU64::new(0),
             tick: AtomicU64::new(0),
-            free_slots: crossbeam::queue::SegQueue::new(),
-            next_slot: AtomicU64::new(0),
-            max_slots: max_backend_slots,
         }
     }
 
@@ -158,32 +148,24 @@ impl DedupTable {
 
     /// Insert a new unique page into the dedup table.
     ///
-    /// Returns the assigned backend offset, or None if the table is full
-    /// and eviction failed.
-    pub fn insert(&self, fp: Fingerprint, page_data: &[u8]) -> Option<u64> {
-        // Check capacity
-        if self.map.len() as u64 >= self.max_entries && !self.evict_lru() {
-            return None;
+    /// Returns false if the table is full or a fingerprint collision prevents
+    /// safe tracking. The caller still owns the backend slot in that case and
+    /// may keep the page as a direct mapping.
+    pub fn insert(&self, fp: Fingerprint, page_data: &[u8], backend_offset: u64) -> bool {
+        if self.map.contains_key(&fp) {
+            return false;
         }
 
-        // Allocate a backend slot
-        let slot = match self.free_slots.pop() {
-            Some(s) => s,
-            None => {
-                let s = self.next_slot.fetch_add(1, Ordering::Relaxed);
-                if s >= self.max_slots {
-                    self.next_slot.fetch_sub(1, Ordering::Relaxed);
-                    return None;
-                }
-                s
-            }
-        };
+        // Check capacity
+        if self.map.len() as u64 >= self.max_entries && !self.evict_lru_metadata() {
+            return false;
+        }
 
         let prefix = fingerprint::page_prefix(page_data);
 
         let entry = Arc::new(DedupEntry {
             ref_count: AtomicU32::new(1),
-            backend_offset: slot,
+            backend_offset,
             prefix,
         });
 
@@ -198,7 +180,7 @@ impl DedupTable {
             lru.push((fp, current_tick));
         }
 
-        Some(slot)
+        true
     }
 
     /// Increment the reference count for a page.
@@ -219,48 +201,57 @@ impl DedupTable {
         }
     }
 
-    /// Decrement the reference count for a page. Returns the backend slot
-    /// to free if ref_count reaches zero.
-    pub fn remove_reference(&self, fp: &Fingerprint) -> Option<u64> {
-        let should_remove = if let Some(entry) = self.map.get(fp) {
+    /// Decrement the reference count for a page.
+    pub fn remove_reference(&self, fp: &Fingerprint) -> ReferenceRemoval {
+        let mut still_referenced = false;
+        let removed = self.map.remove_if(fp, |_, entry| {
             let prev = entry.ref_count.fetch_sub(1, Ordering::Relaxed);
-            prev <= 1
-        } else {
-            false
-        };
-
-        if should_remove {
-            if let Some((_, entry)) = self.map.remove(fp) {
-                let slot = entry.backend_offset;
-                self.free_slots.push(slot);
-
-                // Remove from LRU
-                let mut lru = self.lru.lock();
-                lru.retain(|(f, _)| f != fp);
-
-                return Some(slot);
+            if prev <= 1 {
+                true
+            } else {
+                still_referenced = true;
+                false
             }
-        }
+        });
 
-        None
+        if let Some((_, entry)) = removed {
+            let slot = entry.backend_offset;
+
+            // Remove from LRU
+            let mut lru = self.lru.lock();
+            lru.retain(|(f, _)| f != fp);
+
+            ReferenceRemoval::Removed {
+                backend_offset: slot,
+            }
+        } else if still_referenced {
+            ReferenceRemoval::StillReferenced
+        } else {
+            ReferenceRemoval::NotTracked
+        }
     }
 
-    /// Evict the least-recently-used entry to make room.
-    fn evict_lru(&self) -> bool {
-        let oldest_fp = {
+    /// Evict the least-recently-used metadata entry to make room.
+    ///
+    /// Only singly referenced entries can be untracked. Their translation entry
+    /// still owns the backend slot and will free it when overwritten/discarded.
+    fn evict_lru_metadata(&self) -> bool {
+        let candidates = {
             let mut lru = self.lru.lock();
             if lru.is_empty() {
                 return false;
             }
-            // Find the entry with the oldest tick
+
             lru.sort_by_key(|(_, tick)| *tick);
-            lru.first().map(|(fp, _)| *fp)
+            lru.iter().map(|(fp, _)| *fp).collect::<Vec<_>>()
         };
 
-        if let Some(fp) = oldest_fp {
-            if let Some((_, entry)) = self.map.remove(&fp) {
-                let slot = entry.backend_offset;
-                self.free_slots.push(slot);
+        for fp in candidates {
+            let removed = self
+                .map
+                .remove_if(&fp, |_, entry| entry.ref_count.load(Ordering::Relaxed) <= 1);
+
+            if removed.is_some() {
                 self.evictions.fetch_add(1, Ordering::Relaxed);
 
                 let mut lru = self.lru.lock();
@@ -294,10 +285,23 @@ pub enum LookupResult {
     Duplicate { backend_offset: u64 },
 }
 
+/// Result of removing a dedup-table reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceRemoval {
+    /// The entry still has at least one live translation.
+    StillReferenced,
+    /// The final tracked reference was removed; caller should free this slot.
+    Removed { backend_offset: u64 },
+    /// Metadata was already evicted. The translation owns its slot directly.
+    NotTracked,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fingerprint::PAGE_SIZE;
+    use std::sync::{Arc as StdArc, Barrier};
+    use std::thread;
 
     #[test]
     fn test_bloom_filter() {
@@ -312,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_dedup_table_insert_and_lookup() {
-        let table = DedupTable::new(100, 1000, 1000);
+        let table = DedupTable::new(100, 1000);
 
         let page = vec![0xABu8; PAGE_SIZE];
         let fp = fingerprint::fingerprint_page(&page);
@@ -321,12 +325,12 @@ mod tests {
         assert!(matches!(table.lookup(&fp, &page), LookupResult::Miss));
 
         // Insert the page
-        let slot = table.insert(fp, &page).unwrap();
+        assert!(table.insert(fp, &page, 7));
 
         // Second lookup should find duplicate
         match table.lookup(&fp, &page) {
             LookupResult::Duplicate { backend_offset } => {
-                assert_eq!(backend_offset, slot);
+                assert_eq!(backend_offset, 7);
             }
             _ => panic!("Expected duplicate"),
         }
@@ -334,13 +338,13 @@ mod tests {
 
     #[test]
     fn test_dedup_table_different_content() {
-        let table = DedupTable::new(100, 1000, 1000);
+        let table = DedupTable::new(100, 1000);
 
         let page_a = vec![0xAAu8; PAGE_SIZE];
         let page_b = vec![0xBBu8; PAGE_SIZE];
         let fp_a = fingerprint::fingerprint_page(&page_a);
 
-        table.insert(fp_a, &page_a);
+        assert!(table.insert(fp_a, &page_a, 0));
 
         // Lookup with different content should miss (even if bloom says maybe)
         let fp_b = fingerprint::fingerprint_page(&page_b);
@@ -352,31 +356,102 @@ mod tests {
 
     #[test]
     fn test_dedup_table_refcounting() {
-        let table = DedupTable::new(100, 1000, 1000);
+        let table = DedupTable::new(100, 1000);
 
         let page = vec![0xCCu8; PAGE_SIZE];
         let fp = fingerprint::fingerprint_page(&page);
 
-        table.insert(fp, &page);
+        assert!(table.insert(fp, &page, 11));
         table.add_reference(&fp);
 
         // Remove two references
-        assert!(table.remove_reference(&fp).is_none()); // ref_count = 1
-        assert!(table.remove_reference(&fp).is_some()); // ref_count = 0, slot freed
+        assert_eq!(
+            table.remove_reference(&fp),
+            ReferenceRemoval::StillReferenced
+        );
+        assert_eq!(
+            table.remove_reference(&fp),
+            ReferenceRemoval::Removed { backend_offset: 11 }
+        );
     }
 
     #[test]
-    fn test_dedup_table_eviction() {
-        let table = DedupTable::new(3, 100, 100); // max 3 entries
+    fn test_concurrent_reference_removal_frees_slot_once() {
+        let table = StdArc::new(DedupTable::new(100, 1000));
+        let page = vec![0xDDu8; PAGE_SIZE];
+        let fp = fingerprint::fingerprint_page(&page);
+        let references = 8;
+
+        assert!(table.insert(fp, &page, 12));
+        for _ in 1..references {
+            assert!(table.add_reference(&fp));
+        }
+
+        let barrier = StdArc::new(Barrier::new(references));
+        let mut handles = Vec::new();
+        for _ in 0..references {
+            let table = StdArc::clone(&table);
+            let barrier = StdArc::clone(&barrier);
+
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                table.remove_reference(&fp)
+            }));
+        }
+
+        let removals = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            removals
+                .iter()
+                .filter(|removal| {
+                    matches!(removal, ReferenceRemoval::Removed { backend_offset: 12 })
+                })
+                .count(),
+            1
+        );
+        assert_eq!(
+            removals
+                .iter()
+                .filter(|removal| matches!(removal, ReferenceRemoval::StillReferenced))
+                .count(),
+            references - 1
+        );
+        assert_eq!(table.stats().table_entries, 0);
+    }
+
+    #[test]
+    fn test_dedup_table_metadata_eviction_only_untracks_single_reference_entries() {
+        let table = DedupTable::new(3, 100); // max 3 entries
 
         for i in 0u8..5 {
             let page = vec![i; PAGE_SIZE];
             let fp = fingerprint::fingerprint_page(&page);
-            table.insert(fp, &page);
+            assert!(table.insert(fp, &page, i as u64));
         }
 
         let stats = table.stats();
         assert!(stats.table_entries <= 3);
         assert!(stats.evictions >= 2);
+    }
+
+    #[test]
+    fn test_dedup_table_does_not_evict_shared_entries() {
+        let table = DedupTable::new(1, 100);
+        let page_a = vec![0xAA; PAGE_SIZE];
+        let page_b = vec![0xBB; PAGE_SIZE];
+        let fp_a = fingerprint::fingerprint_page(&page_a);
+        let fp_b = fingerprint::fingerprint_page(&page_b);
+
+        assert!(table.insert(fp_a, &page_a, 0));
+        assert!(table.add_reference(&fp_a));
+        assert!(!table.insert(fp_b, &page_b, 1));
+
+        let stats = table.stats();
+        assert_eq!(stats.table_entries, 1);
+        assert_eq!(stats.evictions, 0);
     }
 }

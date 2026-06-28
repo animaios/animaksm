@@ -9,7 +9,9 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::fingerprint::PAGE_SIZE;
+use crossbeam::queue::SegQueue;
+
+use crate::fingerprint::{Fingerprint, PAGE_SIZE};
 
 /// Backend storage statistics.
 #[derive(Debug, Clone, Default)]
@@ -124,22 +126,92 @@ impl PageStore {
     }
 }
 
+/// Allocates backend page slots for active virtual swap pages.
+///
+/// The allocator is intentionally independent from the virtual offset. A direct
+/// write and a deduplicated write both consume a backend slot, while duplicate
+/// pages share an existing slot through the translation table.
+pub struct SlotAllocator {
+    free_slots: SegQueue<u64>,
+    next_slot: AtomicU64,
+    max_slots: u64,
+}
+
+impl SlotAllocator {
+    pub fn new(max_slots: u64) -> Self {
+        Self {
+            free_slots: SegQueue::new(),
+            next_slot: AtomicU64::new(0),
+            max_slots,
+        }
+    }
+
+    pub fn allocate(&self) -> Option<u64> {
+        if let Some(slot) = self.free_slots.pop() {
+            return Some(slot);
+        }
+
+        let slot = self.next_slot.fetch_add(1, Ordering::Relaxed);
+        if slot >= self.max_slots {
+            self.next_slot.fetch_sub(1, Ordering::Relaxed);
+            None
+        } else {
+            Some(slot)
+        }
+    }
+
+    pub fn free(&self, slot: u64) {
+        if slot < self.max_slots {
+            self.free_slots.push(slot);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn max_slots(&self) -> u64 {
+        self.max_slots
+    }
+}
+
 /// Translation table mapping virtual swap offsets to dedup table state.
 ///
 /// Each entry points to either:
-/// - A unique page stored at a backend slot
-/// - A deduplicated page (ref-counted in the dedup table)
+/// - A direct page stored in a private backend slot
+/// - A deduplicated page, ref-counted in the dedup table when still tracked
 pub struct TranslationTable {
     /// Maps virtual offset (page-aligned) to the fingerprint + backend slot.
     entries: std::collections::HashMap<u64, TranslationEntry>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MappingKind {
+    /// Page was stored directly without entering the dedup table.
+    Direct,
+    /// Page is dedup-table tracked unless its metadata was later evicted.
+    Deduplicated { fingerprint: Fingerprint },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranslationEntry {
-    /// Fingerprint of the page stored at this virtual offset.
-    pub fingerprint: crate::fingerprint::Fingerprint,
+    /// Mapping mode for this virtual offset.
+    pub kind: MappingKind,
     /// Backend slot where the actual data lives.
     pub backend_slot: u64,
+}
+
+impl TranslationEntry {
+    pub fn direct(backend_slot: u64) -> Self {
+        Self {
+            kind: MappingKind::Direct,
+            backend_slot,
+        }
+    }
+
+    pub fn deduplicated(fingerprint: Fingerprint, backend_slot: u64) -> Self {
+        Self {
+            kind: MappingKind::Deduplicated { fingerprint },
+            backend_slot,
+        }
+    }
 }
 
 impl TranslationTable {
@@ -153,16 +225,9 @@ impl TranslationTable {
     pub fn insert(
         &mut self,
         virtual_offset: u64,
-        fingerprint: crate::fingerprint::Fingerprint,
-        backend_slot: u64,
-    ) {
-        self.entries.insert(
-            virtual_offset,
-            TranslationEntry {
-                fingerprint,
-                backend_slot,
-            },
-        );
+        entry: TranslationEntry,
+    ) -> Option<TranslationEntry> {
+        self.entries.insert(virtual_offset, entry)
     }
 
     /// Look up the translation for a virtual offset.
@@ -278,14 +343,17 @@ mod tests {
         assert_eq!(table.len(), 0);
         assert!(table.lookup(0).is_none());
 
-        table.insert(0, fp, 7);
+        assert!(table
+            .insert(0, TranslationEntry::deduplicated(fp, 7))
+            .is_none());
         assert_eq!(table.len(), 1);
         let entry = table.lookup(0).unwrap();
-        assert_eq!(entry.fingerprint, fp);
+        assert_eq!(entry.kind, MappingKind::Deduplicated { fingerprint: fp });
         assert_eq!(entry.backend_slot, 7);
 
         let removed = table.remove(0).unwrap();
         assert_eq!(removed.backend_slot, 7);
+        assert_eq!(removed.kind, MappingKind::Deduplicated { fingerprint: fp });
         assert_eq!(table.len(), 0);
         assert!(table.remove(0).is_none());
     }
@@ -296,12 +364,29 @@ mod tests {
         let fp_a = fingerprint_page(&vec![0xAA; PAGE_SIZE]);
         let fp_b = fingerprint_page(&vec![0xBB; PAGE_SIZE]);
 
-        table.insert(4096, fp_a, 1);
-        table.insert(4096, fp_b, 2);
+        assert!(table
+            .insert(4096, TranslationEntry::deduplicated(fp_a, 1))
+            .is_none());
+        let old = table
+            .insert(4096, TranslationEntry::deduplicated(fp_b, 2))
+            .unwrap();
+        assert_eq!(old.kind, MappingKind::Deduplicated { fingerprint: fp_a });
 
         assert_eq!(table.len(), 1);
         let entry = table.lookup(4096).unwrap();
-        assert_eq!(entry.fingerprint, fp_b);
+        assert_eq!(entry.kind, MappingKind::Deduplicated { fingerprint: fp_b });
         assert_eq!(entry.backend_slot, 2);
+    }
+
+    #[test]
+    fn test_slot_allocator_reuses_freed_slots() {
+        let allocator = SlotAllocator::new(2);
+
+        assert_eq!(allocator.allocate(), Some(0));
+        assert_eq!(allocator.allocate(), Some(1));
+        assert_eq!(allocator.allocate(), None);
+
+        allocator.free(0);
+        assert_eq!(allocator.allocate(), Some(0));
     }
 }

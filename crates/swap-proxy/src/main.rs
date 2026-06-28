@@ -89,6 +89,7 @@ struct ProxyEngine {
     dedup_table: dedup::DedupTable,
     store: Mutex<backend::PageStore>,
     translation: Mutex<backend::TranslationTable>,
+    slot_allocator: Mutex<backend::SlotAllocator>,
     stats: Arc<ProxyStats>,
     passthrough: AtomicBool,
 }
@@ -115,9 +116,10 @@ impl ProxyEngine {
         );
 
         Ok(Self {
-            dedup_table: dedup::DedupTable::new(max_entries, bloom_capacity, total_slots),
+            dedup_table: dedup::DedupTable::new(max_entries, bloom_capacity),
             store: Mutex::new(store),
             translation: Mutex::new(backend::TranslationTable::new()),
+            slot_allocator: Mutex::new(backend::SlotAllocator::new(total_slots)),
             stats: Arc::new(ProxyStats::new()),
             // DEFAULT: passthrough ON — dedup is opportunistic only under low pressure.
             // This prevents latency variance from killing swap performance when
@@ -126,59 +128,120 @@ impl ProxyEngine {
         })
     }
 
+    fn allocate_slot(&self) -> anyhow::Result<u64> {
+        self.slot_allocator
+            .lock()
+            .allocate()
+            .ok_or_else(|| anyhow::anyhow!("page store is full"))
+    }
+
+    fn free_slot(&self, slot: u64) {
+        self.slot_allocator.lock().free(slot);
+    }
+
+    fn release_mapping(&self, entry: backend::TranslationEntry) {
+        match entry.kind {
+            backend::MappingKind::Direct => self.free_slot(entry.backend_slot),
+            backend::MappingKind::Deduplicated { fingerprint } => {
+                match self.dedup_table.remove_reference(&fingerprint) {
+                    dedup::ReferenceRemoval::StillReferenced => {}
+                    dedup::ReferenceRemoval::Removed { backend_offset } => {
+                        self.free_slot(backend_offset);
+                    }
+                    dedup::ReferenceRemoval::NotTracked => {
+                        // The dedup metadata was evicted while this single
+                        // translation kept owning the backend slot.
+                        self.free_slot(entry.backend_slot);
+                    }
+                }
+            }
+        }
+    }
+
+    fn replace_mapping(&self, virtual_offset: u64, entry: backend::TranslationEntry) {
+        let old = self.translation.lock().insert(virtual_offset, entry);
+        if let Some(old) = old {
+            self.release_mapping(old);
+        }
+    }
+
+    fn write_page_to_slot(&self, slot: u64, page: &[u8]) -> anyhow::Result<()> {
+        let mut store = self.store.lock();
+        store.write_page(slot, page)
+    }
+
+    fn write_direct(&self, virtual_offset: u64, page: &[u8]) -> anyhow::Result<()> {
+        let slot = self.allocate_slot()?;
+        if let Err(err) = self.write_page_to_slot(slot, page) {
+            self.free_slot(slot);
+            return Err(err);
+        }
+
+        self.stats.unique_writes.fetch_add(1, Ordering::Relaxed);
+        self.replace_mapping(virtual_offset, backend::TranslationEntry::direct(slot));
+        Ok(())
+    }
+
+    fn write_unique_or_direct(
+        &self,
+        virtual_offset: u64,
+        fp: fingerprint::Fingerprint,
+        page: &[u8],
+    ) -> anyhow::Result<()> {
+        let slot = self.allocate_slot()?;
+        if let Err(err) = self.write_page_to_slot(slot, page) {
+            self.free_slot(slot);
+            return Err(err);
+        }
+
+        let entry = if self.dedup_table.insert(fp, page, slot) {
+            backend::TranslationEntry::deduplicated(fp, slot)
+        } else {
+            warn!("Dedup table full or fingerprint collision, keeping page as direct mapping");
+            backend::TranslationEntry::direct(slot)
+        };
+
+        self.stats.unique_writes.fetch_add(1, Ordering::Relaxed);
+        self.replace_mapping(virtual_offset, entry);
+        Ok(())
+    }
+
     /// Process a page write: fingerprint, check dedup, store or deduplicate.
     fn handle_write(&self, virtual_offset: u64, data: &[u8]) -> anyhow::Result<()> {
         self.stats.total_writes.fetch_add(1, Ordering::Relaxed);
+        let page = normalize_page(data);
 
         // Passthrough mode (when under extreme pressure)
         if self.passthrough.load(Ordering::Relaxed) {
-            let slot = virtual_offset / PAGE_SIZE as u64;
-            let mut store = self.store.lock();
-            store.write_page(slot, data)?;
-            self.stats.unique_writes.fetch_add(1, Ordering::Relaxed);
-            return Ok(());
+            return self.write_direct(virtual_offset, &page);
         }
 
-        let fp = fingerprint_page(data);
+        let fp = fingerprint_page(&page);
 
         // Check dedup table
-        match self.dedup_table.lookup(&fp, data) {
+        match self.dedup_table.lookup(&fp, &page) {
             dedup::LookupResult::Duplicate { backend_offset } => {
-                // Duplicate page! Just add a reference
-                self.dedup_table.add_reference(&fp);
-                self.stats.duplicate_writes.fetch_add(1, Ordering::Relaxed);
+                let stored_page = {
+                    let mut store = self.store.lock();
+                    store.read_page(backend_offset)?
+                };
 
-                // Update translation table
-                let mut xlat = self.translation.lock();
-                // Remove old mapping if any
-                if let Some(old_entry) = xlat.remove(virtual_offset) {
-                    self.dedup_table.remove_reference(&old_entry.fingerprint);
+                if stored_page == page && self.dedup_table.add_reference(&fp) {
+                    self.stats.duplicate_writes.fetch_add(1, Ordering::Relaxed);
+                    self.replace_mapping(
+                        virtual_offset,
+                        backend::TranslationEntry::deduplicated(fp, backend_offset),
+                    );
+                } else {
+                    warn!(
+                        backend_offset,
+                        "Fingerprint lookup did not fully verify, storing page as unique"
+                    );
+                    self.write_unique_or_direct(virtual_offset, fp, &page)?;
                 }
-                xlat.insert(virtual_offset, fp, backend_offset);
             }
             dedup::LookupResult::Miss => {
-                // Unique page, store it
-                match self.dedup_table.insert(fp, data) {
-                    Some(slot) => {
-                        let mut store = self.store.lock();
-                        store.write_page(slot, data)?;
-
-                        self.stats.unique_writes.fetch_add(1, Ordering::Relaxed);
-
-                        let mut xlat = self.translation.lock();
-                        if let Some(old_entry) = xlat.remove(virtual_offset) {
-                            self.dedup_table.remove_reference(&old_entry.fingerprint);
-                        }
-                        xlat.insert(virtual_offset, fp, slot);
-                    }
-                    None => {
-                        warn!("Dedup table full, writing directly");
-                        let slot = virtual_offset / PAGE_SIZE as u64;
-                        let mut store = self.store.lock();
-                        store.write_page(slot, data)?;
-                        self.stats.unique_writes.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
+                self.write_unique_or_direct(virtual_offset, fp, &page)?;
             }
         }
 
@@ -189,26 +252,22 @@ impl ProxyEngine {
     fn handle_read(&self, virtual_offset: u64) -> anyhow::Result<Vec<u8>> {
         self.stats.total_reads.fetch_add(1, Ordering::Relaxed);
 
-        let xlat = self.translation.lock();
-        let slot = if let Some(entry) = xlat.lookup(virtual_offset) {
-            entry.backend_slot
-        } else {
-            // No translation — read directly (unwritten page = zeros)
-            virtual_offset / PAGE_SIZE as u64
+        let entry = self.translation.lock().lookup(virtual_offset).cloned();
+        let Some(entry) = entry else {
+            return Ok(vec![0u8; PAGE_SIZE]);
         };
-        drop(xlat);
 
         let mut store = self.store.lock();
-        store.read_page(slot)
+        store.read_page(entry.backend_slot)
     }
 
     /// Process a discard (trim) for a virtual offset.
     fn handle_discard(&self, virtual_offset: u64) {
         self.stats.discards.fetch_add(1, Ordering::Relaxed);
 
-        let mut xlat = self.translation.lock();
-        if let Some(entry) = xlat.remove(virtual_offset) {
-            self.dedup_table.remove_reference(&entry.fingerprint);
+        let old = self.translation.lock().remove(virtual_offset);
+        if let Some(entry) = old {
+            self.release_mapping(entry);
         }
     }
 
@@ -257,6 +316,13 @@ impl ProxyEngine {
             dedup_table_stats.bloom_false_positives
         );
     }
+}
+
+fn normalize_page(data: &[u8]) -> [u8; PAGE_SIZE] {
+    let mut page = [0u8; PAGE_SIZE];
+    let len = data.len().min(PAGE_SIZE);
+    page[..len].copy_from_slice(&data[..len]);
+    page
 }
 
 fn main() -> anyhow::Result<()> {
@@ -576,7 +642,7 @@ mod tests {
         assert_eq!(engine.stats.unique_writes.load(Ordering::Relaxed), 1);
         assert_eq!(engine.stats.duplicate_writes.load(Ordering::Relaxed), 0);
         assert_eq!(engine.stats.total_reads.load(Ordering::Relaxed), 1);
-        assert_eq!(engine.translation.lock().len(), 0);
+        assert_eq!(engine.translation.lock().len(), 1);
     }
 
     #[test]
@@ -634,6 +700,81 @@ mod tests {
         assert_eq!(engine.stats.discards.load(Ordering::Relaxed), 1);
         assert_eq!(engine.translation.lock().len(), 0);
         assert_eq!(engine.dedup_table.stats().table_entries, 0);
+    }
+
+    #[test]
+    fn test_passthrough_overwrite_clears_old_dedup_translation() {
+        let (_dir, path) = engine_path();
+        let engine = ProxyEngine::new(&path, 1, 128).unwrap();
+        let page_a = vec![0xAA; PAGE_SIZE];
+        let page_b = vec![0xBB; PAGE_SIZE];
+
+        engine.passthrough.store(false, Ordering::Relaxed);
+        engine.handle_write(0, &page_a).unwrap();
+        assert_eq!(engine.dedup_table.stats().table_entries, 1);
+
+        engine.passthrough.store(true, Ordering::Relaxed);
+        engine.handle_write(0, &page_b).unwrap();
+
+        assert_eq!(engine.handle_read(0).unwrap(), page_b);
+        assert_eq!(engine.dedup_table.stats().table_entries, 0);
+        assert_eq!(engine.translation.lock().len(), 1);
+    }
+
+    #[test]
+    fn test_table_full_fallback_still_updates_translation() {
+        let (_dir, path) = engine_path();
+        let engine = ProxyEngine::new(&path, 1, 0).unwrap();
+        engine.passthrough.store(false, Ordering::Relaxed);
+        let page = vec![0x44; PAGE_SIZE];
+
+        engine.handle_write(0, &page).unwrap();
+
+        assert_eq!(engine.handle_read(0).unwrap(), page);
+        assert_eq!(engine.dedup_table.stats().table_entries, 0);
+        assert_eq!(engine.translation.lock().len(), 1);
+    }
+
+    #[test]
+    fn test_direct_and_dedup_slots_do_not_alias() {
+        let (_dir, path) = engine_path();
+        let engine = ProxyEngine::new(&path, 1, 128).unwrap();
+        let direct_page = vec![0x11; PAGE_SIZE];
+        let dedup_page = vec![0x22; PAGE_SIZE];
+
+        engine.handle_write(0, &direct_page).unwrap();
+        engine.passthrough.store(false, Ordering::Relaxed);
+        engine.handle_write(PAGE_SIZE as u64, &dedup_page).unwrap();
+
+        assert_eq!(engine.handle_read(0).unwrap(), direct_page);
+        assert_eq!(engine.handle_read(PAGE_SIZE as u64).unwrap(), dedup_page);
+    }
+
+    #[test]
+    fn test_discarded_page_reads_as_zeroes_without_stale_backend_data() {
+        let (_dir, path) = engine_path();
+        let engine = ProxyEngine::new(&path, 1, 128).unwrap();
+        let page = vec![0x77; PAGE_SIZE];
+
+        engine.handle_write(0, &page).unwrap();
+        engine.handle_discard(0);
+
+        assert_eq!(engine.handle_read(0).unwrap(), vec![0; PAGE_SIZE]);
+    }
+
+    #[test]
+    fn test_short_writes_are_hashed_as_zero_padded_pages() {
+        let (_dir, path) = engine_path();
+        let engine = ProxyEngine::new(&path, 1, 128).unwrap();
+        engine.passthrough.store(false, Ordering::Relaxed);
+
+        engine.handle_write(0, &[1, 2, 3]).unwrap();
+        engine.handle_write(PAGE_SIZE as u64, &[1, 2, 3]).unwrap();
+
+        assert_eq!(engine.stats.duplicate_writes.load(Ordering::Relaxed), 1);
+        let read = engine.handle_read(PAGE_SIZE as u64).unwrap();
+        assert_eq!(&read[..3], &[1, 2, 3]);
+        assert!(read[3..].iter().all(|b| *b == 0));
     }
 
     #[test]
