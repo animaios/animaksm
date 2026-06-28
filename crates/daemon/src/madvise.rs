@@ -227,13 +227,13 @@ pub fn collapse_regions(pid: u32, regions: &[MapsEntry]) -> usize {
 }
 
 /// Build the batch of (addr, len) pairs from eligible regions, capping at
-/// `max_bytes` total and `MAX_IOV_BATCH` entries.
+/// `max_bytes` total.
 fn build_batch(eligible: &[&MapsEntry], max_bytes: u64) -> Vec<(u64, usize)> {
     let mut batch: Vec<(u64, usize)> = Vec::new();
     let mut bytes_accumulated: u64 = 0;
 
     for region in eligible {
-        if bytes_accumulated >= max_bytes || batch.len() >= MAX_IOV_BATCH {
+        if bytes_accumulated >= max_bytes {
             break;
         }
 
@@ -705,6 +705,27 @@ mod tests {
         let refs: Vec<&MapsEntry> = regions.iter().collect();
         let batch = build_batch(&refs, 64 * 1024);
         assert_eq!(batch, vec![(0x10000, 64 * 1024usize)]);
+    }
+
+    #[test]
+    fn test_build_batch_does_not_apply_iovec_limit_to_ptrace_path() {
+        let regions: Vec<MapsEntry> = (0..300)
+            .map(|i| {
+                let start = 0x10000 + i * 0x2000;
+                MapsEntry {
+                    start,
+                    end: start + 0x1000,
+                    perms: "rw-p".into(),
+                    offset: 0,
+                    dev: "00:00".into(),
+                    inode: 0,
+                    pathname: String::new(),
+                }
+            })
+            .collect();
+        let refs: Vec<&MapsEntry> = regions.iter().collect();
+        let batch = build_batch(&refs, 2 * 1024 * 1024);
+        assert_eq!(batch.len(), 300);
     }
 
     #[test]
