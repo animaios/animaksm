@@ -11,8 +11,8 @@ ExecStopPost=-/usr/local/bin/animaksm-swap-proxy cleanup
 Restart=no
 
 # Security hardening
-AmbientCapabilities=CAP_SYS_ADMIN CAP_SYS_RAWIO
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO
+AmbientCapabilities=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_IPC_LOCK
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_IPC_LOCK
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

@@ -242,7 +242,7 @@ animaksm_psi_pressure{level="low"} 1
 Yes! The scanner finds processes by PID namespace. For container workloads, run AnimaKSMD on the host — it sees all container processes and can inject MADV_MERGEABLE into them.
 
 ### What about ZRAM / zswap?
-AnimaKSMD includes a companion **animaksm-swap-proxy** — a deduplicating swap proxy using ublk. See `crates/swap-proxy/` for details.
+AnimaKSMD includes an experimental companion **animaksm-swap-proxy**. It exposes the deduplicating storage layer through Linux ublk in real mode and keeps a dry-run workload for validation. See `crates/swap-proxy/` for details.
 
 ### Is it safe to run on production?
 Yes. AnimaKSMD:

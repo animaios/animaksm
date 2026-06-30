@@ -11,6 +11,7 @@
 mod backend;
 mod dedup;
 mod fingerprint;
+mod ublk_frontend;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -84,8 +85,8 @@ impl ProxyStats {
     }
 }
 
-/// The swap proxy engine (without actual block device integration).
-struct ProxyEngine {
+/// The swap proxy storage engine.
+pub(crate) struct ProxyEngine {
     dedup_table: dedup::DedupTable,
     store: Mutex<backend::PageStore>,
     translation: Mutex<backend::TranslationTable>,
@@ -95,7 +96,7 @@ struct ProxyEngine {
 }
 
 impl ProxyEngine {
-    fn new(store_path: &Path, size_gb: u64, max_entries: u64) -> anyhow::Result<Self> {
+    pub(crate) fn new(store_path: &Path, size_gb: u64, max_entries: u64) -> anyhow::Result<Self> {
         let total_slots = (size_gb * 1024 * 1024 * 1024) / PAGE_SIZE as u64;
         let bloom_capacity = max_entries as usize;
 
@@ -207,7 +208,7 @@ impl ProxyEngine {
     }
 
     /// Process a page write: fingerprint, check dedup, store or deduplicate.
-    fn handle_write(&self, virtual_offset: u64, data: &[u8]) -> anyhow::Result<()> {
+    pub(crate) fn handle_write(&self, virtual_offset: u64, data: &[u8]) -> anyhow::Result<()> {
         self.stats.total_writes.fetch_add(1, Ordering::Relaxed);
         let page = normalize_page(data);
 
@@ -249,7 +250,7 @@ impl ProxyEngine {
     }
 
     /// Process a page read.
-    fn handle_read(&self, virtual_offset: u64) -> anyhow::Result<Vec<u8>> {
+    pub(crate) fn handle_read(&self, virtual_offset: u64) -> anyhow::Result<Vec<u8>> {
         self.stats.total_reads.fetch_add(1, Ordering::Relaxed);
 
         let entry = self.translation.lock().lookup(virtual_offset).cloned();
@@ -262,7 +263,7 @@ impl ProxyEngine {
     }
 
     /// Process a discard (trim) for a virtual offset.
-    fn handle_discard(&self, virtual_offset: u64) {
+    pub(crate) fn handle_discard(&self, virtual_offset: u64) {
         self.stats.discards.fetch_add(1, Ordering::Relaxed);
 
         let old = self.translation.lock().remove(virtual_offset);
@@ -406,38 +407,17 @@ fn run_proxy(
         info!("DRY RUN mode: simulating proxy without actual block device");
         run_dry_run_simulation(store_path, size_gb, max_entries)?;
     } else {
-        // Real mode: would set up ublk device here
-        // For now, demonstrate the engine works with synthetic data
-        info!("Real mode requires ublk_drv kernel module");
-        info!("Use --dry-run to test the dedup engine with synthetic data");
-
-        let engine = ProxyEngine::new(&store_path, size_gb, max_entries)?;
-
-        // Demonstrate with a few synthetic pages
-        info!("Running synthetic dedup demonstration...");
-
-        // Write some duplicate pages
-        let page_a = vec![0xAAu8; PAGE_SIZE];
-        let page_b = vec![0xBBu8; PAGE_SIZE];
-
-        for i in 0..100u64 {
-            let data = if i % 3 == 0 {
-                &page_a
-            } else if i % 3 == 1 {
-                &page_b
-            } else {
-                &page_a
-            };
-            let offset = i * PAGE_SIZE as u64;
-            engine.handle_write(offset, data)?;
-        }
-
-        engine.print_stats();
-
-        info!("Demonstration complete. In production, ublk device would be registered here.");
+        run_real_proxy(store_path, size_gb, max_entries)?;
     }
 
     Ok(())
+}
+
+fn run_real_proxy(store_path: PathBuf, size_gb: u64, max_entries: u64) -> anyhow::Result<()> {
+    info!("Starting real ublk frontend");
+    ublk_frontend::ensure_available()?;
+    let engine = Arc::new(ProxyEngine::new(&store_path, size_gb, max_entries)?);
+    ublk_frontend::run(engine, size_gb)
 }
 
 fn run_dry_run_simulation(
@@ -784,8 +764,12 @@ mod tests {
     }
 
     #[test]
-    fn test_run_proxy_real_mode_demo_completes() {
-        let (_dir, path) = engine_path();
-        run_proxy(path, 1, 128, false).unwrap();
+    fn test_cli_run_defaults_to_real_mode() {
+        let run = Cli::try_parse_from(["animaksm-swap-proxy", "run"]).unwrap();
+
+        match run.command {
+            Commands::Run { dry_run, .. } => assert!(!dry_run),
+            _ => panic!("expected run command"),
+        }
     }
 }
