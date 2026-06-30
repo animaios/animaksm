@@ -289,4 +289,50 @@ enabled = false
             .to_string()
             .contains("dedup_table_max_entries"));
     }
+
+    #[test]
+    fn test_parse_swap_proxy_from_toml() {
+        let toml_str = r#"
+[general]
+state_dir = "/tmp/animaksm-test"
+
+[swap_proxy]
+enabled = true
+device_size_gb = 4
+fingerprint = "xxh3-128"
+dedup_table_max_entries = 100
+zram_backend = "/dev/zram1"
+bloom_capacity = 500
+bloom_false_positive_rate = 0.05
+page_store_path = "/tmp/store.dat"
+"#;
+        let cfg: AnimaksmConfig = toml::from_str(toml_str).unwrap();
+        assert!(cfg.swap_proxy.enabled);
+        assert_eq!(cfg.swap_proxy.device_size_gb, 4);
+        assert_eq!(cfg.swap_proxy.fingerprint, "xxh3-128");
+        assert_eq!(cfg.swap_proxy.dedup_table_max_entries, 100);
+        assert_eq!(cfg.swap_proxy.zram_backend, "/dev/zram1");
+        assert_eq!(cfg.swap_proxy.bloom_capacity, 500);
+        assert_eq!(cfg.swap_proxy.bloom_false_positive_rate, 0.05);
+        assert_eq!(cfg.swap_proxy.page_store_path, "/tmp/store.dat");
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_parse_swap_proxy_missing_section_uses_defaults() {
+        // A TOML without [swap_proxy] still parses using the struct defaults.
+        let toml_str = r#"
+[general]
+state_dir = "/tmp/animaksm-test"
+
+[governor]
+enabled = true
+"#;
+        let cfg: AnimaksmConfig = toml::from_str(toml_str).unwrap();
+        assert!(!cfg.swap_proxy.enabled);
+        assert_eq!(cfg.swap_proxy.device_size_gb, 8);
+        assert_eq!(cfg.swap_proxy.dedup_table_max_entries, 1_000_000);
+        assert_eq!(cfg.swap_proxy.bloom_capacity, 1_000_000);
+        assert!(cfg.validate().is_ok());
+    }
 }

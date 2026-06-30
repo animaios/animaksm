@@ -426,4 +426,104 @@ mod tests {
             Err(-libc::EOPNOTSUPP)
         );
     }
+
+    #[test]
+    fn test_execute_read_with_buffer_smaller_than_request_is_rejected() {
+        let (_dir, engine) = engine();
+        let mut buf = vec![0u8; PAGE_SIZE];
+        let sectors = (PAGE_SIZE / 512 * 2) as u32;
+        let request = BlockRequest::new(UblkOp::Read, 0, sectors);
+        assert_eq!(
+            execute_request(&engine, request, &mut buf),
+            Err(-libc::EINVAL)
+        );
+    }
+
+    #[test]
+    fn test_execute_write_with_buffer_smaller_than_request_is_rejected() {
+        let (_dir, engine) = engine();
+        let mut buf = vec![0xAA; PAGE_SIZE];
+        let sectors = (PAGE_SIZE / 512 * 2) as u32;
+        let request = BlockRequest::new(UblkOp::Write, 0, sectors);
+        assert_eq!(
+            execute_request(&engine, request, &mut buf),
+            Err(-libc::EINVAL)
+        );
+    }
+
+    #[test]
+    fn test_execute_multi_page_write_then_read_roundtrip() {
+        let (_dir, engine) = engine();
+        let sectors = (PAGE_SIZE / 512 * 2) as u32;
+        let mut write_buf = vec![0xAB; PAGE_SIZE * 2];
+        execute_request(
+            &engine,
+            BlockRequest::new(UblkOp::Write, 0, sectors),
+            &mut write_buf,
+        )
+        .unwrap();
+        let mut read_buf = vec![0; PAGE_SIZE * 2];
+        execute_request(
+            &engine,
+            BlockRequest::new(UblkOp::Read, 0, sectors),
+            &mut read_buf,
+        )
+        .unwrap();
+        assert_eq!(read_buf, write_buf);
+    }
+
+    #[test]
+    fn test_execute_unsupported_op_with_nonzero_buffer_returns_eopnotsupp() {
+        let (_dir, engine) = engine();
+        let mut buf = [0u8; PAGE_SIZE];
+        assert_eq!(
+            execute_request(
+                &engine,
+                BlockRequest::new(UblkOp::Unsupported(0xFF), 0, (PAGE_SIZE / 512) as u32),
+                &mut buf
+            ),
+            Err(-libc::EOPNOTSUPP)
+        );
+    }
+
+    #[test]
+    fn test_execute_discard_multi_page_clears_all_translations() {
+        let (_dir, engine) = engine();
+        let sectors_per_page = (PAGE_SIZE / 512) as u32;
+        let p1 = vec![0x11; PAGE_SIZE];
+        let p2 = vec![0x22; PAGE_SIZE];
+        execute_request(
+            &engine,
+            BlockRequest::new(UblkOp::Write, 0, sectors_per_page),
+            &mut p1.clone(),
+        )
+        .unwrap();
+        // 2-page write at byte offset PAGE_SIZE = sector sectors_per_page.
+        execute_request(
+            &engine,
+            BlockRequest::new(UblkOp::Write, sectors_per_page as u64, sectors_per_page * 2),
+            &mut [p2.clone(), p2.clone()].concat(),
+        )
+        .unwrap();
+        // 1 translation at offset 0, 2 translations at offsets PAGE_SIZE and 2*PAGE_SIZE
+        assert_eq!(engine.translation.lock().len(), 3);
+
+        // Discard 3 pages starting at sector 0.
+        execute_request(
+            &engine,
+            BlockRequest::new(UblkOp::Discard, 0, sectors_per_page * 3),
+            &mut [],
+        )
+        .unwrap();
+
+        let mut read_buf = vec![0xFF; PAGE_SIZE];
+        execute_request(
+            &engine,
+            BlockRequest::new(UblkOp::Read, 0, sectors_per_page),
+            &mut read_buf,
+        )
+        .unwrap();
+        assert_eq!(read_buf, vec![0; PAGE_SIZE]);
+        assert_eq!(engine.translation.lock().len(), 0);
+    }
 }

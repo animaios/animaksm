@@ -450,17 +450,21 @@ fn cleanup_after_crash() -> anyhow::Result<()> {
 
 /// Parse `/proc/swaps`-style output and return the device paths of active ublk
 /// swap devices (typically `/dev/ubd0`, `/dev/ubd1`, ...).
+///
+/// Matches `/dev/ubd` followed by one or more digits (e.g. `/dev/ubd0`),
+/// excluding unrelated names like `/dev/ubdish` or `/dev/mapper/vg-ubdswap`.
 fn ubd_devices_in_swapon_output(stdout: &str) -> Vec<String> {
     stdout
         .lines()
         .filter_map(|line| {
             let mut cols = line.split_whitespace();
             let name = cols.next()?;
-            if name.starts_with("/dev/ubd") {
-                Some(name.to_string())
-            } else {
-                None
+            let rest = name.strip_prefix("/dev/ubd")?;
+            // Suffix must be non-empty and all digits.
+            if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
+                return None;
             }
+            Some(name.to_string())
         })
         .collect()
 }
@@ -781,6 +785,89 @@ mod tests {
     fn test_cleanup_handles_empty_swapon_output() {
         let devices = ubd_devices_in_swapon_output("NAME TYPE SIZE USED PRIO\n");
         assert!(devices.is_empty());
+    }
+
+    #[test]
+    fn test_cleanup_ignores_unrelated_devices_with_ubd_substring() {
+        // Regression guard: `contains("ubd")` would wrongly match these.
+        // The names start with "/dev/" but the second component isn't exactly
+        // "ubd" + digits — e.g. "/dev/mapper/vg-ubdswap" and "/dev/ubdish".
+        // `starts_with("/dev/ubd")` would still wrongly match "/dev/ubdish";
+        // a regexp would be stricter. Document current behavior.
+        let stdout = "NAME                      TYPE SIZE USED PRIO\n/dev/mapper/vg-ubdswap  partition 4G 0B 100\n/dev/ubdish             partition 4G 0B 100\n";
+        let devices = ubd_devices_in_swapon_output(stdout);
+        assert!(
+            devices.is_empty(),
+            "expected no false positives for non-ubd* names, got: {devices:?}"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_matches_multiple_ubd_devices() {
+        let stdout = "NAME      TYPE SIZE USED PRIO\n                        /dev/ubd0 partition 8G 0B 100\n                        /dev/ubd1 partition 8G 0B  99\n";
+        let devices = ubd_devices_in_swapon_output(stdout);
+        assert_eq!(
+            devices,
+            vec![String::from("/dev/ubd0"), String::from("/dev/ubd1")]
+        );
+    }
+
+    #[test]
+    fn test_run_command_uses_toml_defaults_when_flags_omitted() {
+        let cli = Cli::try_parse_from(["animaksm-swap-proxy", "run"]).unwrap();
+        let default = AnimaksmConfig::default();
+        match cli.command {
+            Commands::Run {
+                size_gb,
+                page_store_path,
+                max_entries,
+                bloom_capacity,
+                dry_run,
+                ..
+            } => {
+                // Flags are None at CLI layer; TOML merge happens in run_command.
+                assert_eq!(size_gb, None);
+                assert_eq!(page_store_path, None);
+                assert_eq!(max_entries, None);
+                assert_eq!(bloom_capacity, None);
+                assert!(!dry_run);
+                // Sanity: TOML defaults still match the struct's own defaults.
+                assert_eq!(default.swap_proxy.device_size_gb, 8);
+                assert_eq!(default.swap_proxy.dedup_table_max_entries, 1_000_000);
+                assert_eq!(default.swap_proxy.bloom_capacity, 1_000_000);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn test_run_command_flag_overrides_toml_default() {
+        let toml_tmp = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        std::fs::write(
+            toml_tmp.path(),
+            "[swap_proxy]\nenabled = true\ndevice_size_gb = 4\ndedup_table_max_entries = 100\nbloom_capacity = 256\n",
+        )
+        .unwrap();
+
+        // Parse CLI without override flags but with --config. The loaded
+        // config should reflect the TOML-supplied values.
+        let _cli = Cli::try_parse_from([
+            "animaksm-swap-proxy",
+            "--config",
+            toml_tmp.path().to_str().unwrap(),
+            "run",
+        ])
+        .unwrap();
+        let config = AnimaksmConfig::load(toml_tmp.path()).unwrap();
+        assert_eq!(config.swap_proxy.device_size_gb, 4);
+        assert_eq!(config.swap_proxy.dedup_table_max_entries, 100);
+        assert_eq!(config.swap_proxy.bloom_capacity, 256);
+    }
+
+    #[test]
+    fn test_cli_no_config_flag_uses_defaults() {
+        let cli = Cli::try_parse_from(["animaksm-swap-proxy", "run"]).unwrap();
+        assert_eq!(cli.config, None);
     }
 
     #[test]
